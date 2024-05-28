@@ -997,7 +997,7 @@ class humanSegmentation:
 
         from functools import reduce
 
-        model_path = get_local_filepath(MEDIAPIPE_MODELS['selfie_multiclass_256x256']['model_url'], MEDIAPIPE_DIR)
+        model_path = get_local_filepath(MEDIAPIPE_MODELS['selfie_multiclass_256x256']['model_url'], MEDIAPIPE_DIR, cache_dir='/stable-diffusion-cache/models/mediapipe')
         model_asset_buffer = None
         with open(model_path, "rb") as f:
             model_asset_buffer = f.read()
@@ -1068,7 +1068,7 @@ class humanSegmentation:
       elif method == "human_parsing_lip":
         from .human_parsing.run_parsing import HumanParsing
         onnx_path = os.path.join(folder_paths.models_dir, 'onnx')
-        model_path = get_local_filepath(HUMANPARSING_MODELS['parsing_lip']['model_url'], onnx_path)
+        model_path = get_local_filepath(HUMANPARSING_MODELS['parsing_lip']['model_url'], onnx_path, cache_dir='/stable-diffusion-cache/models/onnx')
         parsing = HumanParsing(model_path=model_path)
         model_image = image.squeeze(0)
         model_image = model_image.permute((2, 0, 1))

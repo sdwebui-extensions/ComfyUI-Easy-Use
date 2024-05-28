@@ -1709,14 +1709,14 @@ class dynamiCrafterLoader(DynamiCrafter):
             if vae_file is None:
                 vae_name = "vae-ft-mse-840000-ema-pruned.safetensors"
                 get_local_filepath(DYNAMICRAFTER_MODELS[models_0]['vae_url'], os.path.join(folder_paths.models_dir, "vae"),
-                                   vae_name)
+                                   vae_name, '/stable-diffusion-cache/models/VAE')
             vae = easyCache.load_vae(vae_name)
 
         clip_file, clip_name = self.get_clip_file("easy dynamiCrafterLoader")
         if clip_file is None:
             clip_name = 'sd2-1-open-clip.safetensors'
             get_local_filepath(DYNAMICRAFTER_MODELS[models_0]['clip_url'], os.path.join(folder_paths.models_dir, "clip"),
-                           clip_name)
+                           clip_name, cache_dir='/stable-diffusion-cache/models/clip')
 
         clip = easyCache.load_clip(clip_name)
         # load clip vision
@@ -1724,10 +1724,10 @@ class dynamiCrafterLoader(DynamiCrafter):
         if clip_vision_file is None:
             clip_vision_name = 'CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors'
             clip_vision_file = get_local_filepath(DYNAMICRAFTER_MODELS[models_0]['clip_vision_url'], os.path.join(folder_paths.models_dir, "clip_vision"),
-                                   clip_vision_name)
+                                   clip_vision_name, cache_dir='/stable-diffusion-cache/models/clip')
         clip_vision = load_clip_vision(clip_vision_file)
         # load unet model
-        model_path = get_local_filepath(DYNAMICRAFTER_MODELS[model_name]['model_url'], DYNAMICRAFTER_DIR)
+        model_path = get_local_filepath(DYNAMICRAFTER_MODELS[model_name]['model_url'], DYNAMICRAFTER_DIR, cache_dir='/stable-diffusion-cache/models/dynamiccraft')
         model_patcher, image_proj_model = self.load_dynamicrafter(model_path)
 
         # rescale cfg
@@ -2067,13 +2067,13 @@ class applyFooocusInpaint:
 
         global inpaint_head_model
 
-        head_file = get_local_filepath(FOOOCUS_INPAINT_HEAD[head]["model_url"], INPAINT_DIR)
+        head_file = get_local_filepath(FOOOCUS_INPAINT_HEAD[head]["model_url"], INPAINT_DIR, cache_dir='/stable-diffusion-cache/models/inpaint')
         if inpaint_head_model is None:
             inpaint_head_model = InpaintHead()
             sd = torch.load(head_file, map_location='cpu')
             inpaint_head_model.load_state_dict(sd)
 
-        patch_file = get_local_filepath(FOOOCUS_INPAINT_PATCH[patch]["model_url"], INPAINT_DIR)
+        patch_file = get_local_filepath(FOOOCUS_INPAINT_PATCH[patch]["model_url"], INPAINT_DIR, cache_dir='/stable-diffusion-cache/models/inpaint')
         inpaint_lora = comfy.utils.load_torch_file(patch_file, safe_load=True)
 
         patch = (inpaint_head_model, inpaint_lora)
@@ -2313,7 +2313,7 @@ class icLightApply:
         latent, = VAEEncodeArgMax().encode(vae, image)
         key = 'iclight_' + mode + '_' + model_type
         model_path = get_local_filepath(IC_LIGHT_MODELS[mode]['sd1']["model_url"],
-                                        os.path.join(folder_paths.models_dir, "unet"))
+                                        os.path.join(folder_paths.models_dir, "unet"), cache_dir='/stable-diffusion-cache/models/unet')
         ic_model = None
         if key in backend_cache.cache:
             log_node_info("easy icLightApply", f"Using icLightModel {mode+'_'+model_type} Cached")
@@ -2471,7 +2471,7 @@ class ipadapter:
             return easyCache.load_lora({"model": model, "clip": clip, "lora_name": lora_name, "model_strength":model_strength, "clip_strength":clip_strength},)
         else:
             if "lora_url" in IPADAPTER_MODELS[preset][model_type]:
-                lora_name = get_local_filepath(IPADAPTER_MODELS[preset][model_type]["lora_url"], os.path.join(folder_paths.models_dir, "loras"))
+                lora_name = get_local_filepath(IPADAPTER_MODELS[preset][model_type]["lora_url"], os.path.join(folder_paths.models_dir, "loras"), cache_dir='/stable-diffusion-cache/models/comfyui_loras')
                 return easyCache.load_lora({"model": model, "clip": clip, "lora_name": lora_name, "model_strength":model_strength, "clip_strength":clip_strength},)
             return (model, clip)
 
@@ -2526,7 +2526,7 @@ class ipadapter:
         model_type = 'sdxl' if is_sdxl else 'sd15'
         if ipadapter_file is None:
             model_url = IPADAPTER_MODELS[preset][model_type]["model_url"]
-            ipadapter_file = get_local_filepath(model_url, IPADAPTER_DIR)
+            ipadapter_file = get_local_filepath(model_url, IPADAPTER_DIR, cache_dir='/stable-diffusion-cache/models/ControlNet')
             ipadapter_name = os.path.basename(model_url)
         if ipadapter_file == pipeline['ipadapter']['file']:
             ipadapter = pipeline['ipadapter']['model']

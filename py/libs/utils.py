@@ -170,7 +170,7 @@ def is_linked_styles_selector(prompt, my_unique_id, prompt_type='positive'):
         return False
 
 use_mirror = False
-def get_local_filepath(url, dirname, local_file_name=None):
+def get_local_filepath(url, dirname, local_file_name=None, cache_dir=None):
     """Get local file path when is already downloaded or download it"""
     import os
     from server import PromptServer
@@ -182,6 +182,10 @@ def get_local_filepath(url, dirname, local_file_name=None):
     if not local_file_name:
         parsed_url = urlparse(url)
         local_file_name = os.path.basename(parsed_url.path)
+    if cache_dir is not None:
+        destination = os.path.join(cache_dir, local_file_name)
+        if os.path.exists(destination):
+            return destination
     destination = os.path.join(dirname, local_file_name)
     if not os.path.exists(destination):
         try:

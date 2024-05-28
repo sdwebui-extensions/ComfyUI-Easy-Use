@@ -74,7 +74,7 @@ class LayerDiffuse:
         if model_url is None:
             raise Exception(f"{method.value} is not supported for {sd_version} model")
 
-        model_path = get_local_filepath(model_url, LAYER_DIFFUSION_DIR)
+        model_path = get_local_filepath(model_url, LAYER_DIFFUSION_DIR, cache_dir='/stable-diffusion-cache/models/layer_model')
         layer_lora_state_dict = load_layer_model_state_dict(model_path)
         work_model = model.clone()
         if sd_version == 'sd1':
@@ -176,7 +176,7 @@ class LayerDiffuse:
                     model_url = LAYER_DIFFUSION_VAE['decode'][sd_version]["model_url"]
                     if model_url is None:
                         raise Exception(f"{method.value} is not supported for {sd_version} model")
-                    decoder_file = get_local_filepath(model_url, LAYER_DIFFUSION_DIR)
+                    decoder_file = get_local_filepath(model_url, LAYER_DIFFUSION_DIR, cache_dir='/stable-diffusion-cache/models/layer_model')
                     self.vae_transparent_decoder = TransparentVAEDecoder(
                         load_torch_file(decoder_file),
                         device=comfy.model_management.get_torch_device(),
