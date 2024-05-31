@@ -4253,7 +4253,7 @@ class samplerFull:
 
     def run(self, pipe, steps, cfg, sampler_name, scheduler, denoise, image_output, link_id, save_prefix, seed=None, model=None, positive=None, negative=None, latent=None, vae=None, clip=None, xyPlot=None, tile_size=None, prompt=None, extra_pnginfo=None, my_unique_id=None, force_full_denoise=False, disable_noise=False, downscale_options=None, image=None):
 
-        samp_model = model.clone() if model is not None else pipe["model"].clone()
+        samp_model = model if model is not None else pipe["model"]
         samp_positive = positive if positive is not None else pipe["positive"]
         samp_negative = negative if negative is not None else pipe["negative"]
         samp_samples = latent if latent is not None else pipe["samples"]
@@ -4331,7 +4331,7 @@ class samplerFull:
                     'loader_settings'] else (None, None, None)
                 method = layerDiffuse.get_layer_diffusion_method(pipe['loader_settings']['layer_diffusion_method'],
                                                          samp_blend_samples is not None)
-                images = pipe["images"].movedim(-1, 1) if "images" in pipe else None
+                images = pipe["images"].movedim(-1, 1) if "images" in pipe and pipe['images'] else None
                 weight = pipe['loader_settings']['layer_diffusion_weight'] if 'layer_diffusion_weight' in pipe[
                     'loader_settings'] else 1.0
                 samp_model, samp_positive, samp_negative = layerDiffuse.apply_layer_diffusion(samp_model, method, weight,
