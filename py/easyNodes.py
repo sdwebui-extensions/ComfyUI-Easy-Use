@@ -4,7 +4,7 @@ import folder_paths
 import numpy as np
 import comfy.utils, comfy.sample, comfy.samplers, comfy.controlnet, comfy.model_base, comfy.model_management
 try:
-    import comfy.sampler_helpers
+    import comfy.sampler_helpers, comfy.supported_models
 except:
     pass
 from comfy.sd import CLIP, VAE
@@ -31,6 +31,7 @@ from .libs.xyplot import easyXYPlot
 from .libs.controlnet import easyControlnet
 from .libs.conditioning import prompt_to_cond, set_cond
 from .libs.easing import EasingBase
+from .libs.translate import has_chinese, zh_to_en
 from .libs import cache as backend_cache
 
 sampler = easySampler()
@@ -57,6 +58,8 @@ class positivePrompt:
 
     @staticmethod
     def main(positive):
+        if has_chinese(positive):
+            return zh_to_en([positive])
         return positive,
 
 # 通配符提示词
@@ -86,8 +89,13 @@ class wildcardsPrompt:
 
     CATEGORY = "EasyUse/Prompt"
 
-    @staticmethod
-    def main(*args, **kwargs):
+    def translate(self, text):
+        if has_chinese(text):
+            return zh_to_en([text])[0]
+        else:
+            return text
+
+    def main(self, *args, **kwargs):
         prompt = kwargs["prompt"] if "prompt" in kwargs else None
         seed = kwargs["seed"]
 
@@ -98,10 +106,15 @@ class wildcardsPrompt:
         text = kwargs['text']
         if "multiline_mode" in kwargs and kwargs["multiline_mode"]:
             populated_text = []
+            _text = []
             text = text.split("\n")
             for t in text:
+                t = self.translate(t)
+                _text.append(t)
                 populated_text.append(process(t, seed))
+            text = _text
         else:
+            text = self.translate(text)
             populated_text = [process(text, seed)]
             text = [text]
         return {"ui": {"value": [seed]}, "result": (text, populated_text)}
@@ -126,7 +139,10 @@ class negativePrompt:
 
     @staticmethod
     def main(negative):
-        return negative,
+        if has_chinese(negative):
+            return zh_to_en([negative])
+        else:
+            return negative,
 
 # 风格提示词选择器
 class stylesPromptSelector:
@@ -262,6 +278,8 @@ class prompt:
     CATEGORY = "EasyUse/Prompt"
 
     def doit(self, prompt, main, lighting):
+        if has_chinese(prompt):
+            prompt = zh_to_en([prompt])[0]
         if lighting != 'none' and main != 'none':
             prompt = main + ',' + lighting + ',' + prompt
         elif lighting != 'none' and main == 'none':
@@ -305,6 +323,8 @@ class promptList:
 
             # Only process string input ports.
             if isinstance(v, str) and v != '':
+                if has_chinese(v):
+                    v = zh_to_en([v])[0]
                 prompts.append(v)
 
         return (prompts, prompts)
@@ -332,13 +352,13 @@ class promptLine:
 
     def generate_strings(self, prompt, start_index, max_rows, workflow_prompt=None, my_unique_id=None):
         lines = prompt.split('\n')
+        lines = [zh_to_en([v])[0] if has_chinese(v) else v for v in lines]
 
         start_index = max(0, min(start_index, len(lines) - 1))
 
         end_index = min(start_index + max_rows, len(lines))
 
         rows = lines[start_index:end_index]
-
 
         return (rows, rows)
 
@@ -906,11 +926,11 @@ class fullLoader:
             "empty_latent_width": ("INT", {"default": 512, "min": 64, "max": MAX_RESOLUTION, "step": 8}),
             "empty_latent_height": ("INT", {"default": 512, "min": 64, "max": MAX_RESOLUTION, "step": 8}),
 
-            "positive": ("STRING", {"default":"", "placeholder": "Positive", "multiline": True}),
+            "positive": ("STRING", {"default": "", "placeholder": "Positive", "multiline": True}),
             "positive_token_normalization": (["none", "mean", "length", "length+mean"],),
             "positive_weight_interpretation": (["comfy",  "A1111", "comfy++", "compel", "fixed attention"],),
 
-            "negative": ("STRING", {"default":"", "placeholder": "Negative", "multiline": True}),
+            "negative": ("STRING", {"default": "", "placeholder": "Negative", "multiline": True}),
             "negative_token_normalization": (["none", "mean", "length", "length+mean"],),
             "negative_weight_interpretation": (["comfy",  "A1111", "comfy++", "compel", "fixed attention"],),
 
@@ -955,63 +975,67 @@ class fullLoader:
                 positive_embeddings_final, negative_embeddings_final = easyControlnet().apply(controlnet[0], controlnet[5], positive_embeddings_final, negative_embeddings_final, controlnet[1], start_percent=controlnet[2], end_percent=controlnet[3], control_net=None, scale_soft_weights=controlnet[4], mask=None, easyCache=easyCache, use_cache=True)
 
         log_node_warn("加载完毕...")
-        pipe = {"model": model,
-                "positive": positive_embeddings_final,
-                "negative": negative_embeddings_final,
-                "vae": vae,
-                "clip": clip,
+        pipe = {
+            "model": model,
+            "positive": positive_embeddings_final,
+            "negative": negative_embeddings_final,
+            "vae": vae,
+            "clip": clip,
 
-                "samples": samples,
-                "images": None,
+            "samples": samples,
+            "images": None,
 
-                "loader_settings": {"ckpt_name": ckpt_name,
-                                    "vae_name": vae_name,
-                                    "lora_name": lora_name,
-                                    "lora_model_strength": lora_model_strength,
-                                    "lora_clip_strength": lora_clip_strength,
-                                    "lora_stack": lora_stack,
+            "loader_settings": {
+                "ckpt_name": ckpt_name,
+                "vae_name": vae_name,
+                "lora_name": lora_name,
+                "lora_model_strength": lora_model_strength,
+                "lora_clip_strength": lora_clip_strength,
+                "lora_stack": lora_stack,
 
-                                    "clip_skip": clip_skip,
-                                    "a1111_prompt_style": a1111_prompt_style,
-                                    "positive": positive,
-                                    "positive_token_normalization": positive_token_normalization,
-                                    "positive_weight_interpretation": positive_weight_interpretation,
-                                    "negative": negative,
-                                    "negative_token_normalization": negative_token_normalization,
-                                    "negative_weight_interpretation": negative_weight_interpretation,
-                                    "empty_latent_width": empty_latent_width,
-                                    "empty_latent_height": empty_latent_height,
-                                    "batch_size": batch_size,
-                                    "empty_samples": samples, }
-                }
+                "clip_skip": clip_skip,
+                "a1111_prompt_style": a1111_prompt_style,
+                "positive": positive,
+                "positive_token_normalization": positive_token_normalization,
+                "positive_weight_interpretation": positive_weight_interpretation,
+                "negative": negative,
+                "negative_token_normalization": negative_token_normalization,
+                "negative_weight_interpretation": negative_weight_interpretation,
+                "resolution": resolution,
+                "empty_latent_width": empty_latent_width,
+                "empty_latent_height": empty_latent_height,
+                "batch_size": batch_size,
+            }
+        }
 
         return {"ui": {"positive": positive_wildcard_prompt, "negative": negative_wildcard_prompt}, "result": (pipe, model, vae, clip, positive_embeddings_final, negative_embeddings_final, samples)}
 
 # A1111简易加载器
-class a1111Loader:
+class a1111Loader(fullLoader):
     @classmethod
     def INPUT_TYPES(cls):
         resolution_strings = [f"{width} x {height}" for width, height in BASE_RESOLUTIONS]
         a1111_prompt_style_default = False
         checkpoints = folder_paths.get_filename_list("checkpoints")
         loras = ["None"] + folder_paths.get_filename_list("loras")
-        return {"required": {
-            "ckpt_name": (checkpoints,),
-            "vae_name": (["Baked VAE"] + folder_paths.get_filename_list("vae"),),
-            "clip_skip": ("INT", {"default": -1, "min": -24, "max": 0, "step": 1}),
+        return {
+            "required": {
+                "ckpt_name": (checkpoints,),
+                "vae_name": (["Baked VAE"] + folder_paths.get_filename_list("vae"),),
+                "clip_skip": ("INT", {"default": -1, "min": -24, "max": 0, "step": 1}),
 
-            "lora_name": (loras,),
-            "lora_model_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
-            "lora_clip_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
+                "lora_name": (loras,),
+                "lora_model_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
+                "lora_clip_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
 
-            "resolution": (resolution_strings, {"default": "512 x 512"}),
-            "empty_latent_width": ("INT", {"default": 512, "min": 64, "max": MAX_RESOLUTION, "step": 8}),
-            "empty_latent_height": ("INT", {"default": 512, "min": 64, "max": MAX_RESOLUTION, "step": 8}),
+                "resolution": (resolution_strings, {"default": "512 x 512"}),
+                "empty_latent_width": ("INT", {"default": 512, "min": 64, "max": MAX_RESOLUTION, "step": 8}),
+                "empty_latent_height": ("INT", {"default": 512, "min": 64, "max": MAX_RESOLUTION, "step": 8}),
 
-            "positive": ("STRING", {"default":"", "placeholder": "Positive", "multiline": True}),
-            "negative": ("STRING", {"default":"", "placeholder": "Negative", "multiline": True}),
-            "batch_size": ("INT", {"default": 1, "min": 1, "max": 64}),
-        },
+                "positive": ("STRING", {"default":"", "placeholder": "Positive", "multiline": True}),
+                "negative": ("STRING", {"default":"", "placeholder": "Negative", "multiline": True}),
+                "batch_size": ("INT", {"default": 1, "min": 1, "max": 64}),
+            },
             "optional": {
                 "optional_lora_stack": ("LORA_STACK",),
                 "optional_controlnet_stack": ("CONTROL_NET_STACK",),
@@ -1023,67 +1047,69 @@ class a1111Loader:
     RETURN_TYPES = ("PIPE_LINE", "MODEL", "VAE")
     RETURN_NAMES = ("pipe", "model", "vae")
 
-    FUNCTION = "adv_pipeloader"
+    FUNCTION = "a1111loader"
     CATEGORY = "EasyUse/Loaders"
 
-    def adv_pipeloader(self, ckpt_name, vae_name, clip_skip,
+    def a1111loader(self, ckpt_name, vae_name, clip_skip,
                        lora_name, lora_model_strength, lora_clip_strength,
                        resolution, empty_latent_width, empty_latent_height,
                        positive, negative, batch_size, optional_lora_stack=None, optional_controlnet_stack=None, a1111_prompt_style=False, prompt=None,
                        my_unique_id=None):
 
-        return fullLoader.adv_pipeloader(self, ckpt_name, 'Default', vae_name, clip_skip,
+        return super().adv_pipeloader(ckpt_name, 'Default', vae_name, clip_skip,
              lora_name, lora_model_strength, lora_clip_strength,
              resolution, empty_latent_width, empty_latent_height,
              positive, 'mean', 'A1111',
              negative,'mean','A1111',
-             batch_size, None, None, None, optional_lora_stack=optional_lora_stack, optional_controlnet_stack=optional_controlnet_stack,a1111_prompt_style=a1111_prompt_style, prompt=prompt,
+             batch_size, None, None,  None, optional_lora_stack=optional_lora_stack, optional_controlnet_stack=optional_controlnet_stack,a1111_prompt_style=a1111_prompt_style, prompt=prompt,
              my_unique_id=my_unique_id
         )
 
 # Comfy简易加载器
-class comfyLoader:
+class comfyLoader(fullLoader):
     @classmethod
     def INPUT_TYPES(cls):
         resolution_strings = [f"{width} x {height}" for width, height in BASE_RESOLUTIONS]
-        return {"required": {
-            "ckpt_name": (folder_paths.get_filename_list("checkpoints"),),
-            "vae_name": (["Baked VAE"] + folder_paths.get_filename_list("vae"),),
-            "clip_skip": ("INT", {"default": -1, "min": -24, "max": 0, "step": 1}),
+        return {
+            "required": {
+                "ckpt_name": (folder_paths.get_filename_list("checkpoints"),),
+                "vae_name": (["Baked VAE"] + folder_paths.get_filename_list("vae"),),
+                "clip_skip": ("INT", {"default": -1, "min": -24, "max": 0, "step": 1}),
 
-            "lora_name": (["None"] + folder_paths.get_filename_list("loras"),),
-            "lora_model_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
-            "lora_clip_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
+                "lora_name": (["None"] + folder_paths.get_filename_list("loras"),),
+                "lora_model_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
+                "lora_clip_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
 
-            "resolution": (resolution_strings, {"default": "512 x 512"}),
-            "empty_latent_width": ("INT", {"default": 512, "min": 64, "max": MAX_RESOLUTION, "step": 8}),
-            "empty_latent_height": ("INT", {"default": 512, "min": 64, "max": MAX_RESOLUTION, "step": 8}),
+                "resolution": (resolution_strings, {"default": "512 x 512"}),
+                "empty_latent_width": ("INT", {"default": 512, "min": 64, "max": MAX_RESOLUTION, "step": 8}),
+                "empty_latent_height": ("INT", {"default": 512, "min": 64, "max": MAX_RESOLUTION, "step": 8}),
 
-            "positive": ("STRING", {"default": "", "placeholder": "Positive", "multiline": True}),
-            "negative": ("STRING", {"default": "", "placeholder": "Negative", "multiline": True}),
+                "positive": ("STRING", {"default": "", "placeholder": "Positive", "multiline": True}),
+                "negative": ("STRING", {"default": "", "placeholder": "Negative", "multiline": True}),
 
-            "batch_size": ("INT", {"default": 1, "min": 1, "max": 64}),
-        },
-            "optional": {"optional_lora_stack": ("LORA_STACK",),"optional_controlnet_stack": ("CONTROL_NET_STACK",),},
-            "hidden": {"prompt": "PROMPT", "my_unique_id": "UNIQUE_ID"}}
+                "batch_size": ("INT", {"default": 1, "min": 1, "max": 64}),
+            },
+            "optional": {"optional_lora_stack": ("LORA_STACK",), "optional_controlnet_stack": ("CONTROL_NET_STACK",),},
+            "hidden": {"prompt": "PROMPT", "my_unique_id": "UNIQUE_ID"}
+        }
 
     RETURN_TYPES = ("PIPE_LINE", "MODEL", "VAE")
     RETURN_NAMES = ("pipe", "model", "vae")
 
-    FUNCTION = "adv_pipeloader"
+    FUNCTION = "comfyloader"
     CATEGORY = "EasyUse/Loaders"
 
-    def adv_pipeloader(self, ckpt_name, vae_name, clip_skip,
+    def comfyloader(self, ckpt_name, vae_name, clip_skip,
                        lora_name, lora_model_strength, lora_clip_strength,
                        resolution, empty_latent_width, empty_latent_height,
                        positive, negative, batch_size, optional_lora_stack=None, optional_controlnet_stack=None, prompt=None,
                       my_unique_id=None):
-        return fullLoader.adv_pipeloader(self, ckpt_name, 'Default', vae_name, clip_skip,
+        return super().adv_pipeloader(ckpt_name, 'Default', vae_name, clip_skip,
              lora_name, lora_model_strength, lora_clip_strength,
              resolution, empty_latent_width, empty_latent_height,
              positive, 'none', 'comfy',
              negative, 'none', 'comfy',
-             batch_size, None, None, None, optional_lora_stack=optional_lora_stack,optional_controlnet_stack=optional_controlnet_stack, a1111_prompt_style=False, prompt=prompt,
+             batch_size, None, None, None, optional_lora_stack=optional_lora_stack, optional_controlnet_stack=optional_controlnet_stack, a1111_prompt_style=False, prompt=prompt,
              my_unique_id=my_unique_id
          )
 
@@ -1191,6 +1217,9 @@ class cascadeLoader:
 
         log_node_warn("正在处理提示词...")
         positive_seed = find_wildcards_seed(my_unique_id, positive, prompt)
+        # Translate cn to en
+        if has_chinese(positive):
+            positive = zh_to_en([positive])[0]
         model_c, clip, positive, positive_decode, show_positive_prompt, pipe_lora_stack = process_with_loras(positive,
                                                                                                            model_c, clip,
                                                                                                            "positive",
@@ -1200,6 +1229,9 @@ class cascadeLoader:
                                                                                                            easyCache)
         positive_wildcard_prompt = positive_decode if show_positive_prompt or is_positive_linked_styles_selector else ""
         negative_seed = find_wildcards_seed(my_unique_id, negative, prompt)
+        # Translate cn to en
+        if has_chinese(negative):
+            negative = zh_to_en([negative])[0]
         model_c, clip, negative, negative_decode, show_negative_prompt, pipe_lora_stack = process_with_loras(negative,
                                                                                                            model_c, clip,
                                                                                                            "negative",
@@ -1244,10 +1276,10 @@ class cascadeLoader:
                 "negative": negative,
                 "negative_token_normalization": 'none',
                 "negative_weight_interpretation": 'comfy',
+                "resolution": resolution,
                 "empty_latent_width": empty_latent_width,
                 "empty_latent_height": empty_latent_height,
                 "batch_size": batch_size,
-                "empty_samples": samples,
                 "compression": compression
             }
         }
@@ -1335,7 +1367,7 @@ class zero123Loader:
                                     "empty_latent_height": empty_latent_height,
                                     "batch_size": batch_size,
                                     "seed": 0,
-                                    "empty_samples": samples, }
+                                    }
                 }
 
         return (pipe, model, vae)
@@ -1487,7 +1519,7 @@ class sv3DLoader(EasingBase):
                                     "empty_latent_height": empty_latent_height,
                                     "batch_size": batch_size,
                                     "seed": 0,
-                                    "empty_samples": samples, }
+                                    }
                 }
 
         return (pipe, model, log)
@@ -1566,11 +1598,15 @@ class svdLoader:
             if clip_name == 'None':
                 raise Exception("You need choose a open_clip model when positive is not empty")
             clip = easyCache.load_clip(clip_name)
+            if has_chinese(optional_positive):
+                optional_positive = zh_to_en([optional_positive])[0]
             positive_embeddings_final, = CLIPTextEncode().encode(clip, optional_positive)
             positive, = ConditioningConcat().concat(positive, positive_embeddings_final)
         if optional_negative is not None and optional_negative != '':
             if clip_name == 'None':
                 raise Exception("You need choose a open_clip model when negative is not empty")
+            if has_chinese(optional_negative):
+                optional_positive = zh_to_en([optional_negative])[0]
             negative_embeddings_final, = CLIPTextEncode().encode(clip, optional_negative)
             negative, = ConditioningConcat().concat(negative, negative_embeddings_final)
 
@@ -1593,18 +1629,13 @@ class svdLoader:
                                     "vae_name": vae_name,
 
                                     "positive": positive,
-                                    "positive_l": None,
-                                    "positive_g": None,
-                                    "positive_balance": None,
                                     "negative": negative,
-                                    "negative_l": None,
-                                    "negative_g": None,
-                                    "negative_balance": None,
+                                    "resolution": resolution,
                                     "empty_latent_width": empty_latent_width,
                                     "empty_latent_height": empty_latent_height,
                                     "batch_size": 1,
                                     "seed": 0,
-                                    "empty_samples": samples, }
+                                     }
                 }
 
         return (pipe, model, vae)
@@ -1740,8 +1771,12 @@ class dynamiCrafterLoader(DynamiCrafter):
             clipped.clip_layer(clip_skip)
 
         if positive is not None and positive != '':
+            if has_chinese(positive):
+                positive = zh_to_en([positive])[0]
             positive_embeddings_final, = CLIPTextEncode().encode(clipped, positive)
         if negative is not None and negative != '':
+            if has_chinese(negative):
+                negative = zh_to_en([negative])[0]
             negative_embeddings_final, = CLIPTextEncode().encode(clipped, negative)
 
         image = easySampler.pil2tensor(Image.new('RGB', (1, 1), (0, 0, 0)))
@@ -1761,18 +1796,13 @@ class dynamiCrafterLoader(DynamiCrafter):
                                     "vae_name": vae_name,
 
                                     "positive": positive,
-                                    "positive_l": None,
-                                    "positive_g": None,
-                                    "positive_balance": None,
                                     "negative": negative,
-                                    "negative_l": None,
-                                    "negative_g": None,
-                                    "negative_balance": None,
+                                    "resolution": resolution,
                                     "empty_latent_width": empty_latent_width,
                                     "empty_latent_height": empty_latent_height,
                                     "batch_size": 1,
                                     "seed": 0,
-                                    "empty_samples": empty_latent, }
+                                     }
                 }
 
         return (pipe, model, vae)
@@ -2084,19 +2114,55 @@ class applyFooocusInpaint:
         return (m,)
 
 # brushnet
-class applyBrushNet:
+def get_files_with_extension(folder_name, extension=['.safetensors']):
 
-    def __init__(self):
-        self.inpaint_path = os.path.join(folder_paths.models_dir, 'inpaint')
+    try:
+        folders = folder_paths.get_folder_paths(folder_name)
+    except:
+        folders = []
+
+    if not folders:
+        folders = [os.path.join(folder_paths.models_dir, folder_name)]
+    if not os.path.isdir(folders[0]):
+        folders = [os.path.join(folder_paths.base_path, folder_name)]
+    if not os.path.isdir(folders[0]):
+        return {}
+
+    filtered_folders = []
+    for x in folders:
+        if not os.path.isdir(x):
+            continue
+        the_same = False
+        for y in filtered_folders:
+            if os.path.samefile(x, y):
+                the_same = True
+                break
+        if not the_same:
+            filtered_folders.append(x)
+
+    if not filtered_folders:
+        return {}
+
+    output = {}
+    for x in filtered_folders:
+        files, folders_all = folder_paths.recursive_search(x, excluded_dir_names=[".git"])
+        filtered_files = folder_paths.filter_files_extensions(files, extension)
+
+        for f in filtered_files:
+            output[f] = x
+
+    return output
+class applyBrushNet:
 
     @classmethod
     def INPUT_TYPES(s):
+        s.inpaint_files = get_files_with_extension('inpaint')
         return {
             "required": {
                 "pipe": ("PIPE_LINE",),
                 "image": ("IMAGE",),
                 "mask": ("MASK",),
-                "brushnet": (folder_paths.get_filename_list('inpaint'),),
+                "brushnet": ([file for file in s.inpaint_files],),
                 "dtype": (['float16', 'bfloat16', 'float32', 'float64'], ),
                 "scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0}),
                 "start_at": ("INT", {"default": 0, "min": 0, "max": 10000}),
@@ -2142,28 +2208,25 @@ class applyBrushNet:
 #powerpaint
 class applyPowerPaint:
 
-    def __init__(self):
-        self.inpaint_path = os.path.join(folder_paths.models_dir, 'inpaint')
-        self.clip_path = os.path.join(folder_paths.models_dir, 'clip')
-
-    def get_file_list(filenames, ext='.bin'):
-        return [file for file in filenames if file.lower().endswith(ext)]
-
     @classmethod
     def INPUT_TYPES(s):
+        s.models_files = get_files_with_extension('inpaint')
+        s.inpaint_files = get_files_with_extension('inpaint', ['.bin'])
+        s.clip_files = get_files_with_extension('clip')
         return {
             "required": {
                 "pipe": ("PIPE_LINE",),
                 "image": ("IMAGE",),
                 "mask": ("MASK",),
-                "powerpaint_model": (s.get_file_list(folder_paths.get_filename_list('inpaint'),'.safetensors'),),
-                "powerpaint_clip": (s.get_file_list(folder_paths.get_filename_list('inpaint')),),
+                "powerpaint_model": ([file for file in s.models_files],),
+                "powerpaint_clip": ([file for file in s.inpaint_files],),
                 "dtype": (['float16', 'bfloat16', 'float32', 'float64'],),
                 "fitting": ("FLOAT", {"default": 1.0, "min": 0.3, "max": 1.0}),
                 "function": (['text guided', 'shape guided', 'object removal', 'context aware', 'image outpainting'],),
                 "scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0}),
                 "start_at": ("INT", {"default": 0, "min": 0, "max": 10000}),
                 "end_at": ("INT", {"default": 10000, "min": 0, "max": 10000}),
+                "save_memory": (['none', 'auto', 'max'],),
             },
         }
 
@@ -2172,7 +2235,7 @@ class applyPowerPaint:
     CATEGORY = "EasyUse/Inpaint"
     FUNCTION = "apply"
 
-    def apply(self, pipe, image, mask, powerpaint_model, powerpaint_clip, dtype, fitting, function, scale, start_at, end_at):
+    def apply(self, pipe, image, mask, powerpaint_model, powerpaint_clip, dtype, fitting, function, scale, start_at, end_at, save_memory='none'):
         model = pipe['model']
         vae = pipe['vae']
         positive = pipe['positive']
@@ -2189,7 +2252,7 @@ class applyPowerPaint:
             base_clip = get_local_filepath(model_url, os.path.join(folder_paths.models_dir, 'clip'), cache_dir='/stable-diffusion-cache/models/clip')
             base = os.path.basename(base_clip)
             ppclip, = cls.ppclip_loading(self, base, powerpaint_clip)
-            backend_cache.update_cache(powerpaint_clip, 'ppclip', (False,ppclip))
+            backend_cache.update_cache(powerpaint_clip, 'ppclip', (False, ppclip))
         # load powerpaint model
         if powerpaint_model in backend_cache.cache:
             log_node_info("easy powerpaintApply", f"Using {powerpaint_model} Cached")
@@ -2197,14 +2260,14 @@ class applyPowerPaint:
         else:
             if "BrushNetLoader" not in ALL_NODE_CLASS_MAPPINGS:
                 raise Exception("BrushNetLoader not found,please install ComfyUI-Brushnet")
-            cls = ALL_NODE_CLASS_MAPPINGS['BrushNetLoader']
-            powerpaint, = cls.brushnet_loading(self, powerpaint_model, dtype)
+            brushnet_cls = ALL_NODE_CLASS_MAPPINGS['BrushNetLoader']
+            powerpaint, = brushnet_cls().brushnet_loading(powerpaint_model, dtype)
             backend_cache.update_cache(powerpaint_model, 'powerpaint', (False, powerpaint))
         cls = ALL_NODE_CLASS_MAPPINGS['PowerPaint']
         m, positive, negative, latent = cls().model_update(model=model, vae=vae, image=image, mask=mask, powerpaint=powerpaint,
                                                            clip=ppclip, positive=positive,
                                                            negative=negative, fitting=fitting, function=function,
-                                                           scale=scale, start_at=start_at, end_at=end_at)
+                                                           scale=scale, start_at=start_at, end_at=end_at, save_memory=save_memory)
         new_pipe = {
             **pipe,
             "model": m,
@@ -3585,6 +3648,14 @@ class samplerCustomSettings:
         except:
             raise Exception(f"Custom sampler {sampler_name} not found, Please updated your ComfyUI")
 
+    def add_model_patch_option(self, model):
+        if 'transformer_options' not in model.model_options:
+            model.model_options['transformer_options'] = {}
+        to = model.model_options['transformer_options']
+        if "model_patch" not in to:
+            to["model_patch"] = {}
+        return to
+
     def settings(self, pipe, guider, cfg, cfg_negative, sampler_name, scheduler, steps, sigma_max, sigma_min, rho, beta_d, beta_min, eps_s, flip_sigmas, denoise, add_noise, seed, image_to_latent=None, latent=None, optional_sampler=None, optional_sigmas=None, prompt=None, extra_pnginfo=None, my_unique_id=None):
 
         # 图生图转换
@@ -3594,6 +3665,60 @@ class samplerCustomSettings:
         negative = pipe['negative']
         batch_size = pipe["loader_settings"]["batch_size"] if "batch_size" in pipe["loader_settings"] else 1
         _guider, sigmas = None, None
+
+        # sigmas
+        if optional_sigmas is not None:
+            sigmas = optional_sigmas
+        else:
+            match scheduler:
+                case 'vp':
+                    sigmas, = self.get_custom_cls('VPScheduler').get_sigmas(steps, beta_d, beta_min, eps_s)
+                case 'karrasADV':
+                    sigmas, = self.get_custom_cls('KarrasScheduler').get_sigmas(steps, sigma_max, sigma_min, rho)
+                case 'exponentialADV':
+                    sigmas, = self.get_custom_cls('ExponentialScheduler').get_sigmas(steps, sigma_max, sigma_min)
+                case 'polyExponential':
+                    sigmas, = self.get_custom_cls('PolyexponentialScheduler').get_sigmas(steps, sigma_max, sigma_min,
+                                                                                         rho)
+                case 'sdturbo':
+                    sigmas, = self.get_custom_cls('SDTurboScheduler').get_sigmas(model, steps, denoise)
+                case 'alignYourSteps':
+                    try:
+                        model_type = get_sd_version(model)
+                        if model_type == 'unknown':
+                            raise Exception("This Model not supported")
+                        sigmas, = alignYourStepsScheduler().get_sigmas(model_type.upper(), steps, denoise)
+                    except:
+                        raise Exception("Please update your ComfyUI")
+                case _:
+                    sigmas, = self.get_custom_cls('BasicScheduler').get_sigmas(model, scheduler, steps, denoise)
+
+            # filp_sigmas
+            if flip_sigmas:
+                sigmas, = self.get_custom_cls('FlipSigmas').get_sigmas(sigmas)
+
+        #######################################################################################
+        # brushnet
+        to = None
+        transformer_options = model.model_options['transformer_options'] if "transformer_options" in model.model_options else {}
+        if 'model_patch' in transformer_options and 'brushnet' in transformer_options['model_patch']:
+            to = self.add_model_patch_option(model)
+            mp = to['model_patch']
+            if isinstance(model.model.model_config, comfy.supported_models.SD15):
+                mp['SDXL'] = False
+            elif isinstance(model.model.model_config, comfy.supported_models.SDXL):
+                mp['SDXL'] = True
+            else:
+                print('Base model type: ', type(model.model.model_config))
+                raise Exception("Unsupported model type: ", type(model.model.model_config))
+
+            mp['all_sigmas'] = sigmas
+            mp['unet'] = model.model.diffusion_model
+            mp['step'] = 0
+            mp['total_steps'] = 1
+        #
+        #######################################################################################
+
         if image_to_latent is not None:
             _, height, width, _ = image_to_latent.shape
             if height == 1 and width == 1:
@@ -3635,35 +3760,6 @@ class samplerCustomSettings:
             else:
                 sampler, = self.get_custom_cls('KSamplerSelect').get_sampler(sampler_name)
 
-        # sigmas
-        if optional_sigmas is not None:
-            sigmas = optional_sigmas
-        else:
-            match scheduler:
-                case 'vp':
-                    sigmas, = self.get_custom_cls('VPScheduler').get_sigmas(steps, beta_d, beta_min, eps_s)
-                case 'karrasADV':
-                    sigmas, = self.get_custom_cls('KarrasScheduler').get_sigmas(steps, sigma_max, sigma_min, rho)
-                case 'exponentialADV':
-                    sigmas, = self.get_custom_cls('ExponentialScheduler').get_sigmas(steps, sigma_max, sigma_min)
-                case 'polyExponential':
-                    sigmas, = self.get_custom_cls('PolyexponentialScheduler').get_sigmas(steps, sigma_max, sigma_min, rho)
-                case 'sdturbo':
-                    sigmas, = self.get_custom_cls('SDTurboScheduler').get_sigmas(model, steps, denoise)
-                case 'alignYourSteps':
-                    try:
-                        model_type = get_sd_version(model)
-                        if model_type == 'unknown':
-                            raise Exception("This Model not supported")
-                        sigmas, = alignYourStepsScheduler().get_sigmas(model_type.upper(), steps, denoise)
-                    except:
-                        raise Exception("Please update your ComfyUI")
-                case _:
-                    sigmas, = self.get_custom_cls('BasicScheduler').get_sigmas(model, scheduler, steps, denoise)
-
-            # filp_sigmas
-            if flip_sigmas:
-                sigmas, = self.get_custom_cls('FlipSigmas').get_sigmas(sigmas)
         # noise
         if add_noise == 'disable':
             noise, = self.get_custom_cls('DisableNoise').get_noise()
@@ -4253,7 +4349,7 @@ class samplerFull:
 
     def run(self, pipe, steps, cfg, sampler_name, scheduler, denoise, image_output, link_id, save_prefix, seed=None, model=None, positive=None, negative=None, latent=None, vae=None, clip=None, xyPlot=None, tile_size=None, prompt=None, extra_pnginfo=None, my_unique_id=None, force_full_denoise=False, disable_noise=False, downscale_options=None, image=None):
 
-        samp_model = model.clone() if model is not None else pipe["model"].clone()
+        samp_model = model if model is not None else pipe["model"]
         samp_positive = positive if positive is not None else pipe["positive"]
         samp_negative = negative if negative is not None else pipe["negative"]
         samp_samples = latent if latent is not None else pipe["samples"]
@@ -4282,10 +4378,8 @@ class samplerFull:
             disable_noise = True
 
         def downscale_model_unet(samp_model):
-            if downscale_options is None:
-                return  samp_model
             # 获取Unet参数
-            elif "PatchModelAddDownscale" in ALL_NODE_CLASS_MAPPINGS:
+            if "PatchModelAddDownscale" in ALL_NODE_CLASS_MAPPINGS:
                 cls = ALL_NODE_CLASS_MAPPINGS['PatchModelAddDownscale']
                 # 自动收缩Unet
                 if downscale_options['downscale_factor'] is None:
@@ -4323,6 +4417,7 @@ class samplerFull:
 
             # LayerDiffusion
             layerDiffuse = None
+            samp_blend_samples = None
             layer_diffusion_method = pipe['loader_settings']['layer_diffusion_method'] if 'layer_diffusion_method' in pipe['loader_settings'] else None
             if layer_diffusion_method is not None:
                 layerDiffuse = LayerDiffuse()
@@ -4331,24 +4426,33 @@ class samplerFull:
                     'loader_settings'] else (None, None, None)
                 method = layerDiffuse.get_layer_diffusion_method(pipe['loader_settings']['layer_diffusion_method'],
                                                          samp_blend_samples is not None)
-                images = pipe["images"].movedim(-1, 1) if "images" in pipe else None
+
+                images = pipe["images"] if "images" in pipe else None
                 weight = pipe['loader_settings']['layer_diffusion_weight'] if 'layer_diffusion_weight' in pipe[
                     'loader_settings'] else 1.0
                 samp_model, samp_positive, samp_negative = layerDiffuse.apply_layer_diffusion(samp_model, method, weight,
                                                                                       samp_samples, samp_blend_samples,
                                                                                       samp_positive, samp_negative,
                                                                                       images, additional_cond)
+                resolution = pipe['loader_settings']['resolution'] if 'resolution' in pipe['loader_settings'] else "自定义 X 自定义"
+                empty_latent_width = pipe['loader_settings']['empty_latent_width'] if 'empty_latent_width' in pipe['loader_settings'] else 512
+                empty_latent_height = pipe['loader_settings']['empty_latent_height'] if 'empty_latent_height' in pipe['loader_settings'] else 512
+                batch_size = pipe["loader_settings"]["batch_size"] if "batch_size" in pipe["loader_settings"] else 1
+                samp_samples = sampler.emptyLatent(resolution, empty_latent_width, empty_latent_height, batch_size)
 
-            blend_samples = pipe['blend_samples'] if "blend_samples" in pipe else None
-            empty_samples = pipe["loader_settings"]["empty_samples"] if "empty_samples" in pipe["loader_settings"] else None
-            samples = empty_samples if layer_diffusion_method is not None and empty_samples is not None else samp_samples
             # Downscale Model Unet
-            if samp_model is not None:
+            if samp_model is not None and downscale_options is not None:
                 samp_model = downscale_model_unet(samp_model)
             # 推理初始时间
             start_time = int(time.time() * 1000)
             # 开始推理
-            if scheduler == 'align_your_steps' and samp_custom is None:
+            if samp_custom is not None:
+                guider = samp_custom['guider'] if 'guider' in samp_custom else None
+                _sampler = samp_custom['sampler'] if 'sampler' in samp_custom else None
+                sigmas = samp_custom['sigmas'] if 'sigmas' in samp_custom else None
+                noise = samp_custom['noise'] if 'noise' in samp_custom else None
+                samp_samples, _ = sampler.custom_advanced_ksampler(noise, guider, _sampler, sigmas, samp_samples)
+            elif scheduler == 'align_your_steps':
                 try:
                     model_type = get_sd_version(samp_model)
                     if model_type == 'unknown':
@@ -4357,9 +4461,9 @@ class samplerFull:
                 except:
                     raise Exception("Please update your ComfyUI")
                 _sampler = comfy.samplers.sampler_object(sampler_name)
-                samp_samples = sampler.custom_ksampler(samp_model, samp_seed, steps, cfg, _sampler, sigmas, samp_positive, samp_negative, samples, disable_noise=disable_noise, preview_latent=preview_latent)
+                samp_samples = sampler.custom_ksampler(samp_model, samp_seed, steps, cfg, _sampler, sigmas, samp_positive, samp_negative, samp_samples, disable_noise=disable_noise, preview_latent=preview_latent)
             else:
-                samp_samples = sampler.common_ksampler(samp_model, samp_seed, steps, cfg, sampler_name, scheduler, samp_positive, samp_negative, samples, denoise=denoise, preview_latent=preview_latent, start_step=start_step, last_step=last_step, force_full_denoise=force_full_denoise, disable_noise=disable_noise, custom=samp_custom)
+                samp_samples = sampler.common_ksampler(samp_model, samp_seed, steps, cfg, sampler_name, scheduler, samp_positive, samp_negative, samp_samples, denoise=denoise, preview_latent=preview_latent, start_step=start_step, last_step=last_step, force_full_denoise=force_full_denoise, disable_noise=disable_noise)
             # 推理结束时间
             end_time = int(time.time() * 1000)
             latent = samp_samples["samples"]
@@ -4372,7 +4476,7 @@ class samplerFull:
 
             # LayerDiffusion Decode
             if layerDiffuse is not None:
-                new_images, samp_images, alpha = layerDiffuse.layer_diffusion_decode(layer_diffusion_method, latent, blend_samples, samp_images, samp_model)
+                new_images, samp_images, alpha = layerDiffuse.layer_diffusion_decode(layer_diffusion_method, latent, samp_blend_samples, samp_images, samp_model)
             else:
                 new_images = samp_images
                 alpha = None
@@ -4391,7 +4495,7 @@ class samplerFull:
                 "clip": samp_clip,
 
                 "samples": samp_samples,
-                "blend_samples": blend_samples,
+                "blend_samples": samp_blend_samples,
                 "images": new_images,
                 "samp_images": samp_images,
                 "alpha": alpha,
@@ -4459,7 +4563,7 @@ class samplerFull:
                                             extra_pnginfo, my_unique_id, preview_latent, samp_custom=samp_custom)
 
             # Downscale Model Unet
-            if samp_model is not None:
+            if samp_model is not None and downscale_options is not None:
                 samp_model = downscale_model_unet(samp_model)
 
             blend_samples = pipe['blend_samples'] if "blend_samples" in pipe else None
@@ -4578,10 +4682,7 @@ class samplerFull:
             return process_sample_state(pipe, samp_model, samp_clip, samp_samples, samp_vae, samp_seed, samp_positive, samp_negative, steps, start_step, last_step, cfg, sampler_name, scheduler, denoise, image_output, link_id, save_prefix, tile_size, prompt, extra_pnginfo, my_unique_id, preview_latent, force_full_denoise, disable_noise, samp_custom)
 
 # 简易采样器
-class samplerSimple:
-
-    def __init__(self):
-        pass
+class samplerSimple(samplerFull):
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -4604,17 +4705,17 @@ class samplerSimple:
     RETURN_TYPES = ("PIPE_LINE", "IMAGE",)
     RETURN_NAMES = ("pipe", "image",)
     OUTPUT_NODE = True
-    FUNCTION = "run"
+    FUNCTION = "simple"
     CATEGORY = "EasyUse/Sampler"
 
-    def run(self, pipe, image_output, link_id, save_prefix, model=None, tile_size=None, prompt=None, extra_pnginfo=None, my_unique_id=None, force_full_denoise=False, disable_noise=False):
+    def simple(self, pipe, image_output, link_id, save_prefix, model=None, tile_size=None, prompt=None, extra_pnginfo=None, my_unique_id=None, force_full_denoise=False, disable_noise=False):
 
-        return samplerFull().run(pipe, None, None, None, None, None, image_output, link_id, save_prefix,
+        return super().run(pipe, None, None, None, None, None, image_output, link_id, save_prefix,
                                  None, model, None, None, None, None, None, None,
                                  None, prompt, extra_pnginfo, my_unique_id, force_full_denoise, disable_noise)
 
 # 简易采样器 (Tiled)
-class samplerSimpleTiled:
+class samplerSimpleTiled(samplerFull):
 
     def __init__(self):
         pass
@@ -4640,17 +4741,17 @@ class samplerSimpleTiled:
     RETURN_TYPES = ("PIPE_LINE", "IMAGE",)
     RETURN_NAMES = ("pipe", "image",)
     OUTPUT_NODE = True
-    FUNCTION = "run"
+    FUNCTION = "tiled"
     CATEGORY = "EasyUse/Sampler"
 
-    def run(self, pipe, tile_size=512, image_output='preview', link_id=0, save_prefix='ComfyUI', model=None, prompt=None, extra_pnginfo=None, my_unique_id=None, force_full_denoise=False, disable_noise=False):
+    def tiled(self, pipe, tile_size=512, image_output='preview', link_id=0, save_prefix='ComfyUI', model=None, prompt=None, extra_pnginfo=None, my_unique_id=None, force_full_denoise=False, disable_noise=False):
 
-        return samplerFull().run(pipe, None, None,None,None,None, image_output, link_id, save_prefix,
+        return super().run(pipe, None, None,None,None,None, image_output, link_id, save_prefix,
                                None, model, None, None, None, None, None, None,
                                tile_size, prompt, extra_pnginfo, my_unique_id, force_full_denoise, disable_noise)
 
 # 简易采样器 (LayerDiffusion)
-class samplerSimpleLayerDiffusion:
+class samplerSimpleLayerDiffusion(samplerFull):
 
     def __init__(self):
         pass
@@ -4676,22 +4777,19 @@ class samplerSimpleLayerDiffusion:
     RETURN_NAMES = ("pipe", "final_image", "original_image", "alpha")
     OUTPUT_NODE = True
     OUTPUT_IS_LIST = (False, False, False, True)
-    FUNCTION = "run"
+    FUNCTION = "layerDiffusion"
     CATEGORY = "EasyUse/Sampler"
 
-    def run(self, pipe, image_output='preview', link_id=0, save_prefix='ComfyUI', model=None, prompt=None, extra_pnginfo=None, my_unique_id=None, force_full_denoise=False, disable_noise=False):
+    def layerDiffusion(self, pipe, image_output='preview', link_id=0, save_prefix='ComfyUI', model=None, prompt=None, extra_pnginfo=None, my_unique_id=None, force_full_denoise=False, disable_noise=False):
 
-        result = samplerFull().run(pipe, None, None,None,None,None, image_output, link_id, save_prefix,
+        result = super().run(pipe, None, None,None,None,None, image_output, link_id, save_prefix,
                                None, model, None, None, None, None, None, None,
                                None, prompt, extra_pnginfo, my_unique_id, force_full_denoise, disable_noise)
         pipe = result["result"][0] if "result" in result else None
         return ({"ui":result['ui'], "result":(pipe, pipe["images"], pipe["samp_images"], pipe["alpha"])})
 
 # 简易采样器(收缩Unet)
-class samplerSimpleDownscaleUnet:
-
-    def __init__(self):
-        pass
+class samplerSimpleDownscaleUnet(samplerFull):
 
     upscale_methods = ["bicubic", "nearest-exact", "bilinear", "area", "bislerp"]
 
@@ -4724,10 +4822,10 @@ class samplerSimpleDownscaleUnet:
     RETURN_TYPES = ("PIPE_LINE", "IMAGE",)
     RETURN_NAMES = ("pipe", "image",)
     OUTPUT_NODE = True
-    FUNCTION = "run"
+    FUNCTION = "downscale_unet"
     CATEGORY = "EasyUse/Sampler"
 
-    def run(self, pipe, downscale_mode, block_number, downscale_factor, start_percent, end_percent, downscale_after_skip, downscale_method, upscale_method, image_output, link_id, save_prefix, model=None, tile_size=None, prompt=None, extra_pnginfo=None, my_unique_id=None, force_full_denoise=False, disable_noise=False):
+    def downscale_unet(self, pipe, downscale_mode, block_number, downscale_factor, start_percent, end_percent, downscale_after_skip, downscale_method, upscale_method, image_output, link_id, save_prefix, model=None, tile_size=None, prompt=None, extra_pnginfo=None, my_unique_id=None, force_full_denoise=False, disable_noise=False):
         downscale_options = None
         if downscale_mode == 'Auto':
             downscale_options = {
@@ -4750,15 +4848,11 @@ class samplerSimpleDownscaleUnet:
                 "upscale_method": upscale_method
             }
 
-        return samplerFull().run(pipe, None, None,None,None,None, image_output, link_id, save_prefix,
+        return super().run(pipe, None, None,None,None,None, image_output, link_id, save_prefix,
                                None, model, None, None, None, None, None, None,
                                tile_size, prompt, extra_pnginfo, my_unique_id, force_full_denoise, disable_noise, downscale_options)
 # 简易采样器 (内补)
-class samplerSimpleInpainting:
-
-    def __init__(self):
-        pass
-
+class samplerSimpleInpainting(samplerFull):
     @classmethod
     def INPUT_TYPES(cls):
         return {"required":
@@ -4782,7 +4876,7 @@ class samplerSimpleInpainting:
     RETURN_TYPES = ("PIPE_LINE", "IMAGE", "VAE")
     RETURN_NAMES = ("pipe", "image", "vae")
     OUTPUT_NODE = True
-    FUNCTION = "run"
+    FUNCTION = "inpainting"
     CATEGORY = "EasyUse/Sampler"
 
     def dd(self, model, positive, negative, pixels, vae, mask):
@@ -4828,7 +4922,7 @@ class samplerSimpleInpainting:
         m, positive, negative, latent = cls().model_update(model=model, vae=vae, image=image, mask=mask, brushnet=brushnet, positive=positive, negative=negative, scale=scale, start_at=start_at, end_at=end_at)
         return m, positive, negative, latent
 
-    def run(self, pipe, grow_mask_by, image_output, link_id, save_prefix, additional, model=None, mask=None, tile_size=None, prompt=None, extra_pnginfo=None, my_unique_id=None, force_full_denoise=False, disable_noise=False):
+    def inpainting(self, pipe, grow_mask_by, image_output, link_id, save_prefix, additional, model=None, mask=None, tile_size=None, prompt=None, extra_pnginfo=None, my_unique_id=None, force_full_denoise=False, disable_noise=False):
         _model = model if model is not None else pipe['model']
         latent = pipe['samples'] if 'samples' in pipe else None
         positive = pipe['positive']
@@ -4884,13 +4978,14 @@ class samplerSimpleInpainting:
             case _:
                 latent, = VAEEncodeForInpaint().encode(vae, images, mask, grow_mask_by)
 
-        results = samplerFull().run(pipe, None, None,None,None,None, image_output, link_id, save_prefix,
+        results = super().run(pipe, None, None,None,None,None, image_output, link_id, save_prefix,
                                None, _model, positive, negative, latent, vae, None, None,
                                tile_size, prompt, extra_pnginfo, my_unique_id, force_full_denoise, disable_noise)
 
         result = results['result']
 
         return {"ui":results['ui'],"result":(result[0], result[1], result[0]['vae'],)}
+
 # SDTurbo采样器
 class samplerSDTurbo:
 
@@ -5182,7 +5277,7 @@ class samplerCascadeFull:
         return {"ui": {"images": results}, "result": (new_pipe, new_pipe['model'], new_pipe['samples'])}
 
 # 简易采样器Cascade
-class samplerCascadeSimple:
+class samplerCascadeSimple(samplerCascadeFull):
 
     def __init__(self):
         pass
@@ -5208,12 +5303,12 @@ class samplerCascadeSimple:
     RETURN_TYPES = ("PIPE_LINE", "IMAGE",)
     RETURN_NAMES = ("pipe", "image",)
     OUTPUT_NODE = True
-    FUNCTION = "run"
+    FUNCTION = "simple"
     CATEGORY = "EasyUse/Sampler"
 
-    def run(self, pipe, image_output, link_id, save_prefix, model_c=None, tile_size=None, prompt=None, extra_pnginfo=None, my_unique_id=None, force_full_denoise=False, disable_noise=False):
+    def simple(self, pipe, image_output, link_id, save_prefix, model_c=None, tile_size=None, prompt=None, extra_pnginfo=None, my_unique_id=None, force_full_denoise=False, disable_noise=False):
 
-        return samplerCascadeFull().run(pipe, None, None,None, None,None,None,None, image_output, link_id, save_prefix,
+        return super().run(pipe, None, None,None, None,None,None,None, image_output, link_id, save_prefix,
                                None, None, None, model_c, tile_size, prompt, extra_pnginfo, my_unique_id, force_full_denoise, disable_noise)
 
 class unsampler:
