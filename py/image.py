@@ -650,7 +650,10 @@ class imageRemBg:
       # load model
       model_url = REMBG_MODELS[rem_mode]['model_url']
       suffix = model_url.split(".")[-1]
-      model_path = get_local_filepath(model_url, REMBG_DIR, rem_mode+'.'+suffix)
+      if os.path.exists('/stable-diffusion-cache/models/RMBG-1.4'):
+        model_path = '/stable-diffusion-cache/models/RMBG-1.4/model.pth'
+      else:
+        model_path = get_local_filepath(model_url, REMBG_DIR, rem_mode+'.'+suffix)
 
       net = BriaRMBG()
       device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

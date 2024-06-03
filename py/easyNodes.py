@@ -2186,7 +2186,7 @@ class applyPowerPaint:
                 raise Exception("PowerPaintCLIPLoader not found,please install ComfyUI-Brushnet")
             cls = ALL_NODE_CLASS_MAPPINGS['PowerPaintCLIPLoader']
             model_url = POWERPAINT_CLIP['base_fp16']['model_url']
-            base_clip = get_local_filepath(model_url, os.path.join(folder_paths.models_dir, 'clip'))
+            base_clip = get_local_filepath(model_url, os.path.join(folder_paths.models_dir, 'clip'), cache_dir='/stable-diffusion-cache/models/clip')
             base = os.path.basename(base_clip)
             ppclip, = cls.ppclip_loading(self, base, powerpaint_clip)
             backend_cache.update_cache(powerpaint_clip, 'ppclip', (False,ppclip))
@@ -4814,7 +4814,7 @@ class samplerSimpleInpainting:
         brushname = brushfile[0] if brushfile else None
         if not brushname:
             from urllib.parse import urlparse
-            get_local_filepath(brush_model, INPAINT_DIR)
+            get_local_filepath(brush_model, INPAINT_DIR, cache_dir='/stable-diffusion-cache/models/inpaint')
             parsed_url = urlparse(brush_model)
             brushname = os.path.basename(parsed_url.path)
         return brushname
