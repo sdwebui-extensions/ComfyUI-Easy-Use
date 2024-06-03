@@ -79,7 +79,7 @@ class easySampler:
 
     def common_ksampler(self, model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent, denoise=1.0,
                         disable_noise=False, start_step=None, last_step=None, force_full_denoise=False,
-                        preview_latent=True, disable_pbar=False, custom=None):
+                        preview_latent=True, disable_pbar=False):
         device = comfy.model_management.get_torch_device()
         latent_image = latent["samples"]
 
@@ -104,49 +104,40 @@ class easySampler:
                 preview_bytes = previewer.decode_latent_to_preview_image(preview_format, x0)
             pbar.update_absolute(step + 1, total_steps, preview_bytes)
 
-        if custom is not None:
-            guider = custom['guider'] if 'guider' in custom else None
-            sampler = custom['sampler'] if 'sampler' in custom else None
-            sigmas = custom['sigmas'] if 'sigmas' in custom else None
-            noise = custom['noise'] if 'noise' in custom else None
-            samples = guider.sample(noise.generate_noise(latent), latent_image, sampler, sigmas,
-                                    denoise_mask=noise_mask, callback=callback, disable_pbar=disable_pbar,
-                                    seed=noise.seed)
-            samples = samples.to(comfy.model_management.intermediate_device())
+
+        if disable_noise:
+            noise = torch.zeros(latent_image.size(), dtype=latent_image.dtype, layout=latent_image.layout,
+                                device="cpu")
         else:
-            if disable_noise:
-                noise = torch.zeros(latent_image.size(), dtype=latent_image.dtype, layout=latent_image.layout,
-                                    device="cpu")
+            batch_inds = latent["batch_index"] if "batch_index" in latent else None
+            noise = comfy.sample.prepare_noise(latent_image, seed, batch_inds)
+
+        #######################################################################################
+        # brushnet
+        transformer_options = model.model_options['transformer_options'] if "transformer_options" in model.model_options else {}
+        if 'model_patch' in transformer_options and 'brushnet' in transformer_options['model_patch']:
+            to = self.add_model_patch_option(model)
+            mp = to['model_patch']
+            if isinstance(model.model.model_config, comfy.supported_models.SD15):
+                mp['SDXL'] = False
+            elif isinstance(model.model.model_config, comfy.supported_models.SDXL):
+                mp['SDXL'] = True
             else:
-                batch_inds = latent["batch_index"] if "batch_index" in latent else None
-                noise = comfy.sample.prepare_noise(latent_image, seed, batch_inds)
+                print('Base model type: ', type(model.model.model_config))
+                raise Exception("Unsupported model type: ", type(model.model.model_config))
 
-            #######################################################################################
-            # brushnet
-            transformer_options = model.model_options['transformer_options'] if "transformer_options" in model.model_options else {}
-            if 'model_patch' in transformer_options and 'brushnet' in transformer_options['model_patch']:
-                to = self.add_model_patch_option(model)
-                mp = to['model_patch']
-                if isinstance(model.model.model_config, comfy.supported_models.SD15):
-                    mp['SDXL'] = False
-                elif isinstance(model.model.model_config, comfy.supported_models.SDXL):
-                    mp['SDXL'] = True
-                else:
-                    print('Base model type: ', type(model.model.model_config))
-                    raise Exception("Unsupported model type: ", type(model.model.model_config))
+            mp['unet'] = model.model.diffusion_model
+            mp['step'] = 0
+            mp['total_steps'] = 1
 
-                mp['unet'] = model.model.diffusion_model
-                mp['step'] = 0
-                mp['total_steps'] = 1
-
-            #
-            #######################################################################################
-            samples = comfy.sample.sample(model, noise, steps, cfg, sampler_name, scheduler, positive, negative,
-                                          latent_image,
-                                          denoise=denoise, disable_noise=disable_noise, start_step=start_step,
-                                          last_step=last_step,
-                                          force_full_denoise=force_full_denoise, noise_mask=noise_mask, callback=callback,
-                                          disable_pbar=disable_pbar, seed=seed)
+        #
+        #######################################################################################
+        samples = comfy.sample.sample(model, noise, steps, cfg, sampler_name, scheduler, positive, negative,
+                                      latent_image,
+                                      denoise=denoise, disable_noise=disable_noise, start_step=start_step,
+                                      last_step=last_step,
+                                      force_full_denoise=force_full_denoise, noise_mask=noise_mask, callback=callback,
+                                      disable_pbar=disable_pbar, seed=seed)
 
         out = latent.copy()
         out["samples"] = samples
@@ -183,7 +174,7 @@ class easySampler:
         # brushnet
         to = None
         transformer_options = model.model_options['transformer_options'] if "transformer_options" in model.model_options else {}
-        if 'model_patch' in transformer_options and 'brushnet_model' in transformer_options['model_patch']:
+        if 'model_patch' in transformer_options and 'brushnet' in transformer_options['model_patch']:
             to = self.add_model_patch_option(model)
             mp = to['model_patch']
             if isinstance(model.model.model_config, comfy.supported_models.SD15):
@@ -215,6 +206,32 @@ class easySampler:
         out = latent.copy()
         out["samples"] = samples
         return out
+
+    def custom_advanced_ksampler(self, noise, guider, sampler, sigmas, latent_image):
+        latent = latent_image
+        latent_image = latent["samples"]
+
+        noise_mask = None
+        if "noise_mask" in latent:
+            noise_mask = latent["noise_mask"]
+
+        x0_output = {}
+        callback = latent_preview.prepare_callback(guider.model_patcher, sigmas.shape[-1] - 1, x0_output)
+
+        disable_pbar = not comfy.utils.PROGRESS_BAR_ENABLED
+        samples = guider.sample(noise.generate_noise(latent), latent_image, sampler, sigmas, denoise_mask=noise_mask,
+                                callback=callback, disable_pbar=disable_pbar, seed=noise.seed)
+        samples = samples.to(comfy.model_management.intermediate_device())
+
+        out = latent.copy()
+        out["samples"] = samples
+        if "x0" in x0_output:
+            out_denoised = latent.copy()
+            out_denoised["samples"] = guider.model_patcher.model.process_latent_out(x0_output["x0"].cpu())
+        else:
+            out_denoised = out
+
+        return (out, out_denoised)
 
     def get_value_by_id(self, key: str, my_unique_id: Any) -> Optional[Any]:
         """Retrieve value by its associated ID."""
