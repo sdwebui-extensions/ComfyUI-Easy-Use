@@ -18,15 +18,16 @@ from PIL import Image
 
 from server import PromptServer
 from nodes import MAX_RESOLUTION, LatentFromBatch, RepeatLatentBatch, NODE_CLASS_MAPPINGS as ALL_NODE_CLASS_MAPPINGS, ConditioningSetMask, ConditioningConcat, CLIPTextEncode, VAEEncodeForInpaint, InpaintModelConditioning
-from .config import MAX_SEED_NUM, BASE_RESOLUTIONS, RESOURCES_DIR, INPAINT_DIR, FOOOCUS_STYLES_DIR, FOOOCUS_INPAINT_HEAD, FOOOCUS_INPAINT_PATCH, BRUSHNET_MODELS, POWERPAINT_CLIP, IPADAPTER_DIR, IPADAPTER_MODELS, DYNAMICRAFTER_DIR, DYNAMICRAFTER_MODELS, IC_LIGHT_MODELS
-from .layer_diffuse.func import LayerDiffuse, LayerMethod
+from .config import MAX_SEED_NUM, BASE_RESOLUTIONS, RESOURCES_DIR, INPAINT_DIR, FOOOCUS_STYLES_DIR, FOOOCUS_INPAINT_HEAD, FOOOCUS_INPAINT_PATCH, BRUSHNET_MODELS, POWERPAINT_MODELS, IPADAPTER_DIR, IPADAPTER_MODELS, DYNAMICRAFTER_DIR, DYNAMICRAFTER_MODELS, IC_LIGHT_MODELS
+from .layer_diffuse import LayerDiffuse, LayerMethod
+from .xyplot import XYplot_ModelMergeBlocks, XYplot_CFG, XYplot_Lora, XYplot_Checkpoint, XYplot_Denoise, XYplot_Steps, XYplot_PromptSR, XYplot_Positive_Cond, XYplot_Negative_Cond, XYplot_Positive_Cond_List, XYplot_Negative_Cond_List, XYplot_SeedsBatch, XYplot_Control_Net, XYplot_Sampler_Scheduler
 
 from .libs.log import log_node_info, log_node_error, log_node_warn
 from .libs.adv_encode import advanced_encode
 from .libs.wildcards import process_with_loras, get_wildcard_list, process
 from .libs.utils import find_wildcards_seed, is_linked_styles_selector, easySave, get_local_filepath, AlwaysEqualProxy, get_sd_version
 from .libs.loader import easyLoader
-from .libs.sampler import easySampler, alignYourStepsScheduler
+from .libs.sampler import easySampler, alignYourStepsScheduler, gitsScheduler
 from .libs.xyplot import easyXYPlot
 from .libs.controlnet import easyControlnet
 from .libs.conditioning import prompt_to_cond, set_cond
@@ -36,6 +37,8 @@ from .libs import cache as backend_cache
 
 sampler = easySampler()
 easyCache = easyLoader()
+
+new_schedulers = ['align_your_steps', 'gits']
 # ---------------------------------------------------------------提示词 开始----------------------------------------------------------------------#
 
 # 正面提示词
@@ -173,26 +176,6 @@ class stylesPromptSelector:
     FUNCTION = 'run'
     OUTPUT_NODE = True
 
-
-    def replace_repeat(self, prompt):
-        prompt = prompt.replace("，", ",")
-        arr = prompt.split(",")
-        if len(arr) != len(set(arr)):
-            all_weight_prompt = re.findall(re.compile(r'[(](.*?)[)]', re.S), prompt)
-            if len(all_weight_prompt) > 0:
-                # others_prompt = prompt
-                # for w_prompt in all_weight_prompt:
-                # others_prompt = others_prompt.replace('(','').replace(')','')
-                # print(others_prompt)
-                return prompt
-            else:
-                for i in range(len(arr)):
-                    arr[i] = arr[i].strip()
-                arr = list(set(arr))
-                return ", ".join(arr)
-        else:
-            return prompt
-
     def run(self, styles, positive='', negative='', prompt=None, extra_pnginfo=None, my_unique_id=None):
         values = []
         all_styles = {}
@@ -226,10 +209,6 @@ class stylesPromptSelector:
 
         if has_prompt == False and positive:
             positive_prompt = positive + ', '
-
-        # 去重
-        # positive_prompt = self.replace_repeat(positive_prompt) if positive_prompt else ''
-        # negative_prompt = self.replace_repeat(negative_prompt) if negative_prompt else ''
 
         return (positive_prompt, negative_prompt)
 
@@ -352,7 +331,7 @@ class promptLine:
 
     def generate_strings(self, prompt, start_index, max_rows, workflow_prompt=None, my_unique_id=None):
         lines = prompt.split('\n')
-        lines = [zh_to_en([v])[0] if has_chinese(v) else v for v in lines]
+        lines = [zh_to_en([v])[0] if has_chinese(v) else v for v in lines if v]
 
         start_index = max(0, min(start_index, len(lines) - 1))
 
@@ -609,6 +588,9 @@ class portraitMaster:
 
         return (prompt, negative_prompt,)
 
+# ---------------------------------------------------------------提示词 结束----------------------------------------------------------------------#
+
+# ---------------------------------------------------------------潜空间 开始----------------------------------------------------------------------#
 # 潜空间sigma相乘
 class latentNoisy:
     @classmethod
@@ -679,7 +661,6 @@ class latentNoisy:
         del pipe
 
         return (new_pipe, samples_out, sigma)
-
 
 # Latent遮罩复合
 class latentCompositeMaskedWithCond:
@@ -820,7 +801,9 @@ class injectNoiseToLatent:
         samples["samples"] = noised
         return (samples,)
 
+# ---------------------------------------------------------------潜空间 结束----------------------------------------------------------------------#
 
+# ---------------------------------------------------------------随机种 开始----------------------------------------------------------------------#
 # 随机种
 class easySeed:
     @classmethod
@@ -867,10 +850,9 @@ class globalSeed:
     def doit(self, **kwargs):
         return {}
 
-#---------------------------------------------------------------提示词 结束------------------------------------------------------------------------#
+# ---------------------------------------------------------------随机种 结束----------------------------------------------------------------------#
 
-#---------------------------------------------------------------加载器 开始----------------------------------------------------------------------#
-
+# ---------------------------------------------------------------加载器 开始----------------------------------------------------------------------#
 class setCkptName:
     @classmethod
     def INPUT_TYPES(cls):
@@ -905,11 +887,11 @@ class setControlName:
         return (controlnet_name,)
 
 # 简易加载器完整
+resolution_strings = [f"{width} x {height} (custom)" if width == 'width' and height == 'height' else f"{width} x {height}" for width, height in BASE_RESOLUTIONS]
 class fullLoader:
 
     @classmethod
     def INPUT_TYPES(cls):
-        resolution_strings = [f"{width} x {height}" for width, height in BASE_RESOLUTIONS]
         a1111_prompt_style_default = False
 
         return {"required": {
@@ -958,12 +940,13 @@ class fullLoader:
         # Clean models from loaded_objects
         easyCache.update_loaded_objects(prompt)
 
-        # Create Empty Latent
-        samples = sampler.emptyLatent(resolution, empty_latent_width, empty_latent_height, batch_size)
-
         # Load models
         log_node_warn("正在加载模型...")
         model, clip, vae, clip_vision, lora_stack = easyCache.load_main(ckpt_name, config_name, vae_name, lora_name, lora_model_strength, lora_clip_strength, optional_lora_stack, model_override, clip_override, vae_override, prompt)
+
+        # Create Empty Latent
+        sd3 = True if get_sd_version(model) == 'sd3' else False
+        samples = sampler.emptyLatent(resolution, empty_latent_width, empty_latent_height, batch_size, sd3=sd3)
 
         # Prompt to Conditioning
         positive_embeddings_final, positive_wildcard_prompt, model, clip = prompt_to_cond('positive', model, clip, clip_skip, lora_stack, positive, positive_token_normalization, positive_weight_interpretation, a1111_prompt_style, my_unique_id, prompt, easyCache)
@@ -1014,7 +997,6 @@ class fullLoader:
 class a1111Loader(fullLoader):
     @classmethod
     def INPUT_TYPES(cls):
-        resolution_strings = [f"{width} x {height}" for width, height in BASE_RESOLUTIONS]
         a1111_prompt_style_default = False
         checkpoints = folder_paths.get_filename_list("checkpoints")
         loras = ["None"] + folder_paths.get_filename_list("loras")
@@ -1069,7 +1051,6 @@ class a1111Loader(fullLoader):
 class comfyLoader(fullLoader):
     @classmethod
     def INPUT_TYPES(cls):
-        resolution_strings = [f"{width} x {height}" for width, height in BASE_RESOLUTIONS]
         return {
             "required": {
                 "ckpt_name": (folder_paths.get_filename_list("checkpoints"),),
@@ -1120,7 +1101,6 @@ class cascadeLoader:
 
     @classmethod
     def INPUT_TYPES(s):
-        resolution_strings = [f"{width} x {height}" for width, height in BASE_RESOLUTIONS]
 
         return {"required": {
             "stage_c": (folder_paths.get_filename_list("unet") + folder_paths.get_filename_list("checkpoints"),),
@@ -1529,7 +1509,6 @@ class svdLoader:
 
     @classmethod
     def INPUT_TYPES(cls):
-        resolution_strings = [f"{width} x {height}" for width, height in BASE_RESOLUTIONS]
         def get_file_list(filenames):
             return [file for file in filenames if file != "put_models_here.txt" and "svd" in file.lower()]
 
@@ -1649,7 +1628,6 @@ class dynamiCrafterLoader(DynamiCrafter):
 
     @classmethod
     def INPUT_TYPES(cls):
-        resolution_strings = [f"{width} x {height}" for width, height in BASE_RESOLUTIONS]
 
         return {"required": {
                 "model_name": (list(DYNAMICRAFTER_MODELS.keys()),),
@@ -1806,6 +1784,144 @@ class dynamiCrafterLoader(DynamiCrafter):
                 }
 
         return (pipe, model, vae)
+
+# Dit Loader
+from .dit.utils import string_to_dtype
+from .dit.hunyuanDiT.config import hydit_conf, dtypes, devices
+class hunyuanDiTLoader:
+    @classmethod
+    def INPUT_TYPES(cls):
+        for k in range(1, torch.cuda.device_count()):
+            devices.append(f"cuda:{k}")
+        return {
+            "required": {
+                "ckpt_name": (folder_paths.get_filename_list("checkpoints"),),
+                "model":(list(hydit_conf.keys()),{"default":"G/2"}),
+                "vae_name": (folder_paths.get_filename_list("vae"),),
+                "clip_name": (folder_paths.get_filename_list("clip"),),
+                "mt5_name": (folder_paths.get_filename_list("t5"),),
+                "device": (devices, {"default": "cpu"}),
+                "dtype": (dtypes,),
+                "resolution": (resolution_strings,{'default':'1024 x 1024'}),
+                "empty_latent_width": ("INT", {"default": 1024, "min": 64, "max": MAX_RESOLUTION, "step": 8}),
+                "empty_latent_height": ("INT", {"default": 1024, "min": 64, "max": MAX_RESOLUTION, "step": 8}),
+
+                "positive": ("STRING", {"default": "", "placeholder": "Positive", "multiline": True}),
+                "negative": ("STRING", {"default": "", "placeholder": "Negative", "multiline": True}),
+
+                "batch_size": ("INT", {"default": 1, "min": 1, "max": 64}),
+            }
+        }
+
+    RETURN_TYPES = ("PIPE_LINE", "MODEL", "VAE")
+    RETURN_NAMES = ("pipe", "model", "vae")
+    FUNCTION = "hydit_pipeloader"
+    CATEGORY = "EasyUse/Loaders"
+
+    def text_encoder(self, text, text_t5, clip, t5):
+        # T5
+        t5.load_model()
+        t5_pre = t5.tokenizer(
+            text_t5,
+            max_length=t5.cond_stage_model.max_length,
+            padding='max_length',
+            truncation=True,
+            return_attention_mask=True,
+            add_special_tokens=True,
+            return_tensors='pt'
+        )
+        t5_mask = t5_pre["attention_mask"]
+        with torch.no_grad():
+            t5_outs = t5.cond_stage_model.transformer(
+                input_ids=t5_pre["input_ids"].to(t5.load_device),
+                attention_mask=t5_mask.to(t5.load_device),
+                output_hidden_states=True,
+            )
+            # to-do: replace -1 for clip skip
+            t5_embs = t5_outs["hidden_states"][-1].float().cpu()
+
+        # clip
+        clip.load_model()
+        clip_pre = clip.tokenizer(
+            text,
+            max_length=clip.cond_stage_model.max_length,
+            padding='max_length',
+            truncation=True,
+            return_attention_mask=True,
+            add_special_tokens=True,
+            return_tensors='pt'
+        )
+        clip_mask = clip_pre["attention_mask"]
+        with torch.no_grad():
+            clip_outs = clip.cond_stage_model.transformer(
+                input_ids=clip_pre["input_ids"].to(clip.load_device),
+                attention_mask=clip_mask.to(clip.load_device),
+            )
+            # to-do: add hidden states
+            clip_embs = clip_outs[0].float().cpu()
+
+        # combined cond
+        return ([[
+            clip_embs, {
+                "context_t5": t5_embs,
+                "context_mask": clip_mask.float(),
+                "context_t5_mask": t5_mask.float()
+            }
+        ]],)
+
+    def hydit_pipeloader(self, ckpt_name, model, vae_name, clip_name, mt5_name, device, dtype, resolution, empty_latent_width, empty_latent_height, positive, negative, batch_size, prompt=None, my_unique_id=None):
+        dtype = string_to_dtype(dtype, "text_encoder")
+        if device == "cpu":
+            assert dtype in [None, torch.float32,
+                             torch.bfloat16], f"Can't use dtype '{dtype}' with CPU! Set dtype to 'default' or 'bf16'."
+
+        # Load models
+        log_node_warn("正在加载模型...")
+        # load checkpoint
+
+        model = easyCache.load_dit_ckpt(ckpt_name=ckpt_name, model_name=model, hydit_conf=hydit_conf, model_type='HyDiT')
+        # load vae
+        vae = easyCache.load_vae(vae_name)
+        # load clip
+        clip = easyCache.load_dit_clip(clip_name=clip_name, device=device, dtype=dtype, model_type='HyDiT')
+        # load t5
+        t5 = easyCache.load_dit_t5(t5_name=mt5_name, device=device, dtype=dtype, model_type='HyDiT')
+
+        # Create Empty Latent
+        samples = sampler.emptyLatent(resolution, empty_latent_width, empty_latent_height, batch_size, sd3=False)
+
+        # t5 text encoder
+        positive_embeddings_final, = self.text_encoder(positive, positive, clip, t5)
+        negative_embeddings_final, = self.text_encoder(negative, negative, clip, t5)
+
+        log_node_warn("加载完毕...")
+        pipe = {
+            "model": model,
+            "positive": positive_embeddings_final,
+            "negative": negative_embeddings_final,
+            "vae": vae,
+            "clip": clip,
+
+            "samples": samples,
+            "images": None,
+
+            "loader_settings": {
+                "ckpt_name": ckpt_name,
+                "clip_name": clip_name,
+                "vae_name": vae_name,
+                "mt5_name": mt5_name,
+
+                "positive": positive,
+                "negative": negative,
+                "resolution": resolution,
+                "empty_latent_width": empty_latent_width,
+                "empty_latent_height": empty_latent_height,
+                "batch_size": batch_size,
+            }
+        }
+
+        return {"ui": {},
+                "result": (pipe, model, vae, clip, positive_embeddings_final, negative_embeddings_final, samples)}
 
 
 # lora
@@ -2070,11 +2186,12 @@ class LLLiteLoader:
 
         return (model_lllite,)
 
+# ---------------------------------------------------------------加载器 结束----------------------------------------------------------------------#
+
 #---------------------------------------------------------------Inpaint 开始----------------------------------------------------------------------#
 
 # FooocusInpaint
 from .libs.fooocus import InpaintHead, InpaintWorker
-inpaint_head_model = None
 
 class applyFooocusInpaint:
     @classmethod
@@ -2095,13 +2212,10 @@ class applyFooocusInpaint:
 
     def apply(self, model, latent, head, patch):
 
-        global inpaint_head_model
-
         head_file = get_local_filepath(FOOOCUS_INPAINT_HEAD[head]["model_url"], INPAINT_DIR, cache_dir='/stable-diffusion-cache/models/inpaint')
-        if inpaint_head_model is None:
-            inpaint_head_model = InpaintHead()
-            sd = torch.load(head_file, map_location='cpu')
-            inpaint_head_model.load_state_dict(sd)
+        inpaint_head_model = InpaintHead()
+        sd = torch.load(head_file, map_location='cpu')
+        inpaint_head_model.load_state_dict(sd)
 
         patch_file = get_local_filepath(FOOOCUS_INPAINT_PATCH[patch]["model_url"], INPAINT_DIR, cache_dir='/stable-diffusion-cache/models/inpaint')
         inpaint_lora = comfy.utils.load_torch_file(patch_file, safe_load=True)
@@ -2114,55 +2228,20 @@ class applyFooocusInpaint:
         return (m,)
 
 # brushnet
-def get_files_with_extension(folder_name, extension=['.safetensors']):
-
-    try:
-        folders = folder_paths.get_folder_paths(folder_name)
-    except:
-        folders = []
-
-    if not folders:
-        folders = [os.path.join(folder_paths.models_dir, folder_name)]
-    if not os.path.isdir(folders[0]):
-        folders = [os.path.join(folder_paths.base_path, folder_name)]
-    if not os.path.isdir(folders[0]):
-        return {}
-
-    filtered_folders = []
-    for x in folders:
-        if not os.path.isdir(x):
-            continue
-        the_same = False
-        for y in filtered_folders:
-            if os.path.samefile(x, y):
-                the_same = True
-                break
-        if not the_same:
-            filtered_folders.append(x)
-
-    if not filtered_folders:
-        return {}
-
-    output = {}
-    for x in filtered_folders:
-        files, folders_all = folder_paths.recursive_search(x, excluded_dir_names=[".git"])
-        filtered_files = folder_paths.filter_files_extensions(files, extension)
-
-        for f in filtered_files:
-            output[f] = x
-
-    return output
+from .brushnet import BrushNet
 class applyBrushNet:
+
+    def get_files_with_extension(folder='inpaint', extensions='.safetensors'):
+        return [file for file in folder_paths.get_filename_list(folder) if file.endswith(extensions)]
 
     @classmethod
     def INPUT_TYPES(s):
-        s.inpaint_files = get_files_with_extension('inpaint')
         return {
             "required": {
                 "pipe": ("PIPE_LINE",),
                 "image": ("IMAGE",),
                 "mask": ("MASK",),
-                "brushnet": ([file for file in s.inpaint_files],),
+                "brushnet": (s.get_files_with_extension(),),
                 "dtype": (['float16', 'bfloat16', 'float32', 'float64'], ),
                 "scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0}),
                 "start_at": ("INT", {"default": 0, "min": 0, "max": 10000}),
@@ -2181,17 +2260,15 @@ class applyBrushNet:
         vae = pipe['vae']
         positive = pipe['positive']
         negative = pipe['negative']
+        cls = BrushNet()
         if brushnet in backend_cache.cache:
             log_node_info("easy brushnetApply", f"Using {brushnet} Cached")
             _, brushnet_model = backend_cache.cache[brushnet][1]
         else:
-            if "BrushNetLoader" not in ALL_NODE_CLASS_MAPPINGS:
-                raise Exception("BrushNetLoader not found,please install ComfyUI-BrushNet")
-            cls = ALL_NODE_CLASS_MAPPINGS['BrushNetLoader']
-            brushnet_model, = cls.brushnet_loading(self, brushnet, dtype)
+            brushnet_file = os.path.join(folder_paths.get_full_path("inpaint", brushnet))
+            brushnet_model, = cls.load_brushnet_model(brushnet_file, dtype)
             backend_cache.update_cache(brushnet, 'brushnet', (False, brushnet_model))
-        cls = ALL_NODE_CLASS_MAPPINGS['BrushNet']
-        m, positive, negative, latent = cls().model_update(model=model, vae=vae, image=image, mask=mask,
+        m, positive, negative, latent = cls.brushnet_model_update(model=model, vae=vae, image=image, mask=mask,
                                                            brushnet=brushnet_model, positive=positive,
                                                            negative=negative, scale=scale, start_at=start_at,
                                                            end_at=end_at)
@@ -2205,21 +2282,20 @@ class applyBrushNet:
         del pipe
         return (new_pipe,)
 
-#powerpaint
+# #powerpaint
 class applyPowerPaint:
+    def get_files_with_extension(folder='inpaint', extensions='.safetensors'):
+        return [file for file in folder_paths.get_filename_list(folder) if file.endswith(extensions)]
 
     @classmethod
     def INPUT_TYPES(s):
-        s.models_files = get_files_with_extension('inpaint')
-        s.inpaint_files = get_files_with_extension('inpaint', ['.bin'])
-        s.clip_files = get_files_with_extension('clip')
         return {
             "required": {
                 "pipe": ("PIPE_LINE",),
                 "image": ("IMAGE",),
                 "mask": ("MASK",),
-                "powerpaint_model": ([file for file in s.models_files],),
-                "powerpaint_clip": ([file for file in s.inpaint_files],),
+                "powerpaint_model": (s.get_files_with_extension(),),
+                "powerpaint_clip": (s.get_files_with_extension(extensions='.bin'),),
                 "dtype": (['float16', 'bfloat16', 'float32', 'float64'],),
                 "fitting": ("FLOAT", {"default": 1.0, "min": 0.3, "max": 1.0}),
                 "function": (['text guided', 'shape guided', 'object removal', 'context aware', 'image outpainting'],),
@@ -2240,31 +2316,26 @@ class applyPowerPaint:
         vae = pipe['vae']
         positive = pipe['positive']
         negative = pipe['negative']
+
+        cls = BrushNet()
         # load powerpaint clip
         if powerpaint_clip in backend_cache.cache:
             log_node_info("easy powerpaintApply", f"Using {powerpaint_clip} Cached")
             _, ppclip = backend_cache.cache[powerpaint_clip][1]
         else:
-            if "PowerPaintCLIPLoader" not in ALL_NODE_CLASS_MAPPINGS:
-                raise Exception("PowerPaintCLIPLoader not found,please install ComfyUI-Brushnet")
-            cls = ALL_NODE_CLASS_MAPPINGS['PowerPaintCLIPLoader']
-            model_url = POWERPAINT_CLIP['base_fp16']['model_url']
+            model_url = POWERPAINT_MODELS['base_fp16']['model_url']
             base_clip = get_local_filepath(model_url, os.path.join(folder_paths.models_dir, 'clip'), cache_dir='/stable-diffusion-cache/models/clip')
-            base = os.path.basename(base_clip)
-            ppclip, = cls.ppclip_loading(self, base, powerpaint_clip)
+            ppclip, = cls.load_powerpaint_clip(base_clip, os.path.join(folder_paths.get_full_path("inpaint", powerpaint_clip)))
             backend_cache.update_cache(powerpaint_clip, 'ppclip', (False, ppclip))
         # load powerpaint model
         if powerpaint_model in backend_cache.cache:
             log_node_info("easy powerpaintApply", f"Using {powerpaint_model} Cached")
             _, powerpaint = backend_cache.cache[powerpaint_model][1]
         else:
-            if "BrushNetLoader" not in ALL_NODE_CLASS_MAPPINGS:
-                raise Exception("BrushNetLoader not found,please install ComfyUI-Brushnet")
-            brushnet_cls = ALL_NODE_CLASS_MAPPINGS['BrushNetLoader']
-            powerpaint, = brushnet_cls().brushnet_loading(powerpaint_model, dtype)
+            powerpaint_file = os.path.join(folder_paths.get_full_path("inpaint", powerpaint_model))
+            powerpaint, = cls.load_brushnet_model(powerpaint_file, dtype)
             backend_cache.update_cache(powerpaint_model, 'powerpaint', (False, powerpaint))
-        cls = ALL_NODE_CLASS_MAPPINGS['PowerPaint']
-        m, positive, negative, latent = cls().model_update(model=model, vae=vae, image=image, mask=mask, powerpaint=powerpaint,
+        m, positive, negative, latent = cls.powerpaint_model_update(model=model, vae=vae, image=image, mask=mask, powerpaint=powerpaint,
                                                            clip=ppclip, positive=positive,
                                                            negative=negative, fitting=fitting, function=function,
                                                            scale=scale, start_at=start_at, end_at=end_at, save_memory=save_memory)
@@ -2277,6 +2348,142 @@ class applyPowerPaint:
         }
         del pipe
         return (new_pipe,)
+
+class applyInpaint:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "pipe": ("PIPE_LINE",),
+                "image": ("IMAGE",),
+                "mask": ("MASK",),
+                "inpaint_mode": (('normal', 'fooocus_inpaint', 'brushnet_random', 'brushnet_segmentation', 'powerpaint'),),
+                "encode": (('none', 'vae_encode_inpaint', 'inpaint_model_conditioning', 'different_diffusion'), {"default": "none"}),
+                "grow_mask_by": ("INT", {"default": 6, "min": 0, "max": 64, "step": 1}),
+                "dtype": (['float16', 'bfloat16', 'float32', 'float64'],),
+                "fitting": ("FLOAT", {"default": 1.0, "min": 0.3, "max": 1.0}),
+                "function": (['text guided', 'shape guided', 'object removal', 'context aware', 'image outpainting'],),
+                "scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0}),
+                "start_at": ("INT", {"default": 0, "min": 0, "max": 10000}),
+                "end_at": ("INT", {"default": 10000, "min": 0, "max": 10000}),
+            },
+        }
+
+    RETURN_TYPES = ("PIPE_LINE",)
+    RETURN_NAMES = ("pipe",)
+    CATEGORY = "EasyUse/Inpaint"
+    FUNCTION = "apply"
+
+    def inpaint_model_conditioning(self, pipe, image, vae, mask, grow_mask_by):
+        if grow_mask_by >0:
+            mask, = GrowMask().expand_mask(mask, grow_mask_by, False)
+        positive, negative, latent = InpaintModelConditioning().encode(pipe['positive'], pipe['negative'], image,
+                                                                       vae, mask)
+        pipe['positive'] = positive
+        pipe['negative'] = negative
+        pipe['samples'] = latent
+
+        return pipe
+
+    def get_brushnet_model(self, type, model):
+        model_type = 'sdxl' if isinstance(model.model.model_config, comfy.supported_models.SDXL) else 'sd1'
+        if type == 'brushnet_random':
+            brush_model = BRUSHNET_MODELS['random_mask'][model_type]['model_url']
+            if model_type == 'sdxl':
+                pattern = 'brushnet.random.mask.sdxl.*\.(safetensors|bin)$'
+            else:
+                pattern = 'brushnet.random.mask.*\.(safetensors|bin)$'
+        elif type == 'brushnet_segmentation':
+            brush_model = BRUSHNET_MODELS['segmentation_mask'][model_type]['model_url']
+            if model_type == 'sdxl':
+                pattern = 'brushnet.segmentation.mask.sdxl.*\.(safetensors|bin)$'
+            else:
+                pattern = 'brushnet.segmentation.mask.*\.(safetensors|bin)$'
+
+
+        brushfile = [e for e in folder_paths.get_filename_list('inpaint') if re.search(pattern, e, re.IGNORECASE)]
+        brushname = brushfile[0] if brushfile else None
+        if not brushname:
+            from urllib.parse import urlparse
+            get_local_filepath(brush_model, INPAINT_DIR)
+            parsed_url = urlparse(brush_model)
+            brushname = os.path.basename(parsed_url.path)
+        return brushname
+
+    def get_powerpaint_model(self, model):
+        model_type = 'sdxl' if isinstance(model.model.model_config, comfy.supported_models.SDXL) else 'sd1'
+        if model_type == 'sdxl':
+            raise Exception("Powerpaint not supported for SDXL models")
+
+        powerpaint_model = POWERPAINT_MODELS['v2.1']['model_url']
+        powerpaint_clip = POWERPAINT_MODELS['v2.1']['clip_url']
+
+        from urllib.parse import urlparse
+        get_local_filepath(powerpaint_model, os.path.join(INPAINT_DIR, 'powerpaint'))
+        model_parsed_url = urlparse(powerpaint_model)
+        clip_parsed_url = urlparse(powerpaint_clip)
+        model_name = os.path.join("powerpaint",os.path.basename(model_parsed_url.path))
+        clip_name = os.path.join("powerpaint",os.path.basename(clip_parsed_url.path))
+        return model_name, clip_name
+
+    def apply(self, pipe, image, mask, inpaint_mode, encode, grow_mask_by, dtype, fitting, function, scale, start_at, end_at):
+        new_pipe = {
+            **pipe,
+        }
+        del pipe
+        if inpaint_mode in ['brushnet_random', 'brushnet_segmentation']:
+            brushnet = self.get_brushnet_model(inpaint_mode, new_pipe['model'])
+            new_pipe, = applyBrushNet().apply(new_pipe, image, mask, brushnet, dtype, scale, start_at, end_at)
+        elif inpaint_mode == 'powerpaint':
+            powerpaint_model, powerpaint_clip = self.get_powerpaint_model(new_pipe['model'])
+            new_pipe, = applyPowerPaint().apply(new_pipe, image, mask, powerpaint_model, powerpaint_clip, dtype, fitting, function, scale, start_at, end_at)
+
+        vae = new_pipe['vae']
+        if encode == 'none':
+            if inpaint_mode == 'fooocus_inpaint':
+                model, = applyFooocusInpaint().apply(new_pipe['model'], new_pipe['samples'],
+                                                     list(FOOOCUS_INPAINT_HEAD.keys())[0],
+                                                     list(FOOOCUS_INPAINT_PATCH.keys())[0])
+                new_pipe['model'] = model
+        elif encode == 'vae_encode_inpaint':
+            latent, = VAEEncodeForInpaint().encode(vae, image, mask, grow_mask_by)
+            new_pipe['samples'] = latent
+            if inpaint_mode == 'fooocus_inpaint':
+                model, = applyFooocusInpaint().apply(new_pipe['model'], new_pipe['samples'],
+                                                     list(FOOOCUS_INPAINT_HEAD.keys())[0],
+                                                     list(FOOOCUS_INPAINT_PATCH.keys())[0])
+                new_pipe['model'] = model
+        elif encode == 'inpaint_model_conditioning':
+            if inpaint_mode == 'fooocus_inpaint':
+                latent, = VAEEncodeForInpaint().encode(vae, image, mask, grow_mask_by)
+                new_pipe['samples'] = latent
+                model, = applyFooocusInpaint().apply(new_pipe['model'], new_pipe['samples'],
+                                                     list(FOOOCUS_INPAINT_HEAD.keys())[0],
+                                                     list(FOOOCUS_INPAINT_PATCH.keys())[0])
+                new_pipe['model'] = model
+                new_pipe = self.inpaint_model_conditioning(new_pipe, image, vae, mask, 0)
+            else:
+                new_pipe = self.inpaint_model_conditioning(new_pipe, image, vae, mask, grow_mask_by)
+        elif encode == 'different_diffusion':
+            if inpaint_mode == 'fooocus_inpaint':
+                latent, = VAEEncodeForInpaint().encode(vae, image, mask, grow_mask_by)
+                new_pipe['samples'] = latent
+                model, = applyFooocusInpaint().apply(new_pipe['model'], new_pipe['samples'],
+                                                     list(FOOOCUS_INPAINT_HEAD.keys())[0],
+                                                     list(FOOOCUS_INPAINT_PATCH.keys())[0])
+                new_pipe['model'] = model
+                new_pipe = self.inpaint_model_conditioning(new_pipe, image, vae, mask, 0)
+            else:
+                new_pipe = self.inpaint_model_conditioning(new_pipe, image, vae, mask, grow_mask_by)
+            cls = ALL_NODE_CLASS_MAPPINGS['DifferentialDiffusion']
+            if cls is not None:
+                model, = cls().apply(new_pipe['model'])
+                new_pipe['model'] = model
+            else:
+                raise Exception("Differential Diffusion not found,please update comfyui")
+
+        return (new_pipe,)
+# ---------------------------------------------------------------Inpaint 结束----------------------------------------------------------------------#
 
 #---------------------------------------------------------------适配器 开始----------------------------------------------------------------------#
 
@@ -2303,7 +2510,7 @@ class styleAlignedBatchAlign:
         return (styleAlignBatch(model, share_norm, share_attn, scale),)
 
 # 光照对齐
-from .ic_light.func import ICLight, VAEEncodeArgMax
+from .ic_light.__init__ import ICLight, VAEEncodeArgMax
 class icLightApply:
 
     @classmethod
@@ -2418,7 +2625,7 @@ class ipadapter:
             'FACEID PLUS V2',
             'FACEID PORTRAIT (style transfer)'
         ]
-        self.weight_types = ["linear", "ease in", "ease out", 'ease in-out', 'reverse in-out', 'weak input', 'weak output', 'weak middle', 'strong middle', 'style transfer', 'composition']
+        self.weight_types = ["linear", "ease in", "ease out", 'ease in-out', 'reverse in-out', 'weak input', 'weak output', 'weak middle', 'strong middle', 'style transfer', 'composition', 'strong style transfer', 'style and composition', 'style transfer precise']
         self.presets = self.normal_presets + self.faceid_presets
 
 
@@ -2492,7 +2699,7 @@ class ipadapter:
                 # if v11 is not found, try with the old version
                 if not [e for e in ipadapter_list if re.search(pattern, e, re.IGNORECASE)]:
                     pattern = 'portrait.sd15\.(safetensors|bin)$'
-                is_insightface = True
+            is_insightface = True
         elif preset == "faceid":
             if is_sdxl:
                 pattern = 'faceid.sdxl\.(safetensors|bin)$'
@@ -2525,6 +2732,21 @@ class ipadapter:
         #     log_node_info(node_name, f"Using {ipadapter_name}")
 
         return ipadapter_file, ipadapter_name, is_insightface, lora_pattern
+
+    def get_lora_pattern(self, file):
+        basename = os.path.basename(file)
+        lora_pattern = None
+        if re.search(r'faceid.sdxl\.(safetensors|bin)$', basename, re.IGNORECASE):
+            lora_pattern = 'faceid.sdxl.lora\.safetensors$'
+        elif re.search(r'faceid.sd15\.(safetensors|bin)$', basename, re.IGNORECASE):
+            lora_pattern = 'faceid.sd15.lora\.safetensors$'
+        elif re.search(r'faceid.plus.sd15\.(safetensors|bin)$', basename, re.IGNORECASE):
+            lora_pattern = 'faceid.plus.sd15.lora\.safetensors$'
+        elif re.search(r'faceid.plusv2.sdxl\.(safetensors|bin)$', basename, re.IGNORECASE):
+            lora_pattern = 'faceid.plusv2.sdxl.lora\.safetensors$'
+        elif re.search(r'faceid.plusv2.sd15\.(safetensors|bin)$', basename, re.IGNORECASE):
+            lora_pattern = 'faceid.plusv2.sd15.lora\.safetensors$'
+        return lora_pattern
 
     def get_lora_file(self, preset, pattern, model_type, model, model_strength, clip_strength, clip=None):
         lora_list = folder_paths.get_filename_list("loras")
@@ -2562,8 +2784,15 @@ class ipadapter:
     def load_model(self, model, preset, lora_model_strength, provider="CPU", clip_vision=None, optional_ipadapter=None, cache_mode='none', node_name='easy ipadapterApply'):
         pipeline = {"clipvision": {'file': None, 'model': None}, "ipadapter": {'file': None, 'model': None},
                     "insightface": {'provider': None, 'model': None}}
+        ipadapter, insightface, is_insightface, lora_pattern = None, None, None, None
         if optional_ipadapter is not None:
             pipeline = optional_ipadapter
+            if not clip_vision:
+                clip_vision = pipeline['clipvision']['model']
+            ipadapter = pipeline['ipadapter']['model']
+            if 'insightface' in pipeline:
+                insightface = pipeline['insightface']['model']
+                lora_pattern = self.get_lora_pattern(pipeline['ipadapter']['file'])
 
         # 1. Load the clipvision model
         if not clip_vision:
@@ -2581,29 +2810,30 @@ class ipadapter:
                 if cache_mode in ["all", "clip_vision only"]:
                     backend_cache.update_cache(clipvision_name, 'clip_vision', (False, clip_vision))
             pipeline['clipvision']['file'] = clipvision_file
-        pipeline['clipvision']['model'] = clip_vision
+            pipeline['clipvision']['model'] = clip_vision
 
         # 2. Load the ipadapter model
         is_sdxl = isinstance(model.model, comfy.model_base.SDXL)
-        ipadapter_file, ipadapter_name, is_insightface, lora_pattern = self.get_ipadapter_file(preset, is_sdxl, node_name)
-        model_type = 'sdxl' if is_sdxl else 'sd15'
-        if ipadapter_file is None:
-            model_url = IPADAPTER_MODELS[preset][model_type]["model_url"]
-            ipadapter_file = get_local_filepath(model_url, IPADAPTER_DIR, cache_dir='/stable-diffusion-cache/models/ControlNet')
-            ipadapter_name = os.path.basename(model_url)
-        if ipadapter_file == pipeline['ipadapter']['file']:
-            ipadapter = pipeline['ipadapter']['model']
-        elif cache_mode in ["all", "ipadapter only"] and ipadapter_name in backend_cache.cache:
-            log_node_info("easy ipadapterApply", f"Using IpAdapterModel {ipadapter_name} Cached")
-            _, ipadapter = backend_cache.cache[ipadapter_name][1]
-        else:
-            ipadapter = self.ipadapter_model_loader(ipadapter_file)
-            pipeline['ipadapter']['file'] = ipadapter_file
-            log_node_info("easy ipadapterApply", f"Using IpAdapterModel {ipadapter_name}")
-            if cache_mode in ["all", "ipadapter only"]:
-                backend_cache.update_cache(ipadapter_name, 'ipadapter', (False, ipadapter))
+        if not ipadapter:
+            ipadapter_file, ipadapter_name, is_insightface, lora_pattern = self.get_ipadapter_file(preset, is_sdxl, node_name)
+            model_type = 'sdxl' if is_sdxl else 'sd15'
+            if ipadapter_file is None:
+                model_url = IPADAPTER_MODELS[preset][model_type]["model_url"]
+                ipadapter_file = get_local_filepath(model_url, IPADAPTER_DIR, cache_dir='/stable-diffusion-cache/models/ControlNet')
+                ipadapter_name = os.path.basename(model_url)
+            if ipadapter_file == pipeline['ipadapter']['file']:
+                ipadapter = pipeline['ipadapter']['model']
+            elif cache_mode in ["all", "ipadapter only"] and ipadapter_name in backend_cache.cache:
+                log_node_info("easy ipadapterApply", f"Using IpAdapterModel {ipadapter_name} Cached")
+                _, ipadapter = backend_cache.cache[ipadapter_name][1]
+            else:
+                ipadapter = self.ipadapter_model_loader(ipadapter_file)
+                pipeline['ipadapter']['file'] = ipadapter_file
+                log_node_info("easy ipadapterApply", f"Using IpAdapterModel {ipadapter_name}")
+                if cache_mode in ["all", "ipadapter only"]:
+                    backend_cache.update_cache(ipadapter_name, 'ipadapter', (False, ipadapter))
 
-        pipeline['ipadapter']['model'] = ipadapter
+            pipeline['ipadapter']['model'] = ipadapter
 
         # 3. Load the lora model if needed
         if lora_pattern is not None:
@@ -2612,18 +2842,19 @@ class ipadapter:
 
         # 4. Load the insightface model if needed
         if is_insightface:
-            icache_key = 'insightface-' + provider
-            if provider == pipeline['insightface']['provider']:
-                insightface = pipeline['insightface']['model']
-            elif cache_mode in ["all", "insightface only"] and icache_key in backend_cache.cache:
-                log_node_info("easy ipadapterApply", f"Using InsightFaceModel {icache_key} Cached")
-                _, insightface = backend_cache.cache[icache_key][1]
-            else:
-                insightface = insightface_loader(provider)
-                if cache_mode in ["all", "insightface only"]:
-                    backend_cache.update_cache(icache_key, 'insightface',(False, insightface))
-            pipeline['insightface']['provider'] = provider
-            pipeline['insightface']['model'] = insightface
+            if not insightface:
+                icache_key = 'insightface-' + provider
+                if provider == pipeline['insightface']['provider']:
+                    insightface = pipeline['insightface']['model']
+                elif cache_mode in ["all", "insightface only"] and icache_key in backend_cache.cache:
+                    log_node_info("easy ipadapterApply", f"Using InsightFaceModel {icache_key} Cached")
+                    _, insightface = backend_cache.cache[icache_key][1]
+                else:
+                    insightface = insightface_loader(provider)
+                    if cache_mode in ["all", "insightface only"]:
+                        backend_cache.update_cache(icache_key, 'insightface',(False, insightface))
+                pipeline['insightface']['provider'] = provider
+                pipeline['insightface']['model'] = insightface
 
         return (model, pipeline,)
 
@@ -2719,6 +2950,7 @@ class ipadapterApplyAdvanced(ipadapter):
                 "attn_mask": ("MASK",),
                 "clip_vision": ("CLIP_VISION",),
                 "optional_ipadapter": ("IPADAPTER",),
+                "layer_weights": ("STRING", {"default": "", "multiline": True, "placeholder": "Mad Scientist Layer Weights"}),
             }
         }
 
@@ -2727,10 +2959,15 @@ class ipadapterApplyAdvanced(ipadapter):
     CATEGORY = "EasyUse/Adapter"
     FUNCTION = "apply"
 
-    def apply(self, model, image, preset, lora_strength, provider, weight, weight_faceidv2, weight_type, combine_embeds, start_at, end_at, embeds_scaling, cache_mode, use_tiled, use_batch, sharpening, weight_style=1.0, weight_composition=1.0, image_style=None, image_composition=None, expand_style=False, image_negative=None, clip_vision=None, attn_mask=None, optional_ipadapter=None):
+    def apply(self, model, image, preset, lora_strength, provider, weight, weight_faceidv2, weight_type, combine_embeds, start_at, end_at, embeds_scaling, cache_mode, use_tiled, use_batch, sharpening, weight_style=1.0, weight_composition=1.0, image_style=None, image_composition=None, expand_style=False, image_negative=None, clip_vision=None, attn_mask=None, optional_ipadapter=None, layer_weights=None):
         images, masks = image, [None]
         model, ipadapter = self.load_model(model, preset, lora_strength, provider, clip_vision=clip_vision, optional_ipadapter=optional_ipadapter, cache_mode=cache_mode)
-        if use_tiled:
+        if layer_weights:
+            if "IPAdapterMS" not in ALL_NODE_CLASS_MAPPINGS:
+                self.error()
+            cls = ALL_NODE_CLASS_MAPPINGS["IPAdapterAdvanced"]
+            model, images = cls().apply_ipadapter(model, ipadapter, weight=weight, weight_type=weight_type, start_at=start_at, end_at=end_at, combine_embeds=combine_embeds, weight_faceidv2=weight_faceidv2, image=image, image_negative=image_negative, weight_style=weight_style, weight_composition=weight_composition, image_style=image_style, image_composition=image_composition, expand_style=expand_style, clip_vision=clip_vision, attn_mask=attn_mask, insightface=None, embeds_scaling=embeds_scaling, layer_weights=layer_weights)
+        elif use_tiled:
             if use_batch:
                 if "IPAdapterTiledBatch" not in ALL_NODE_CLASS_MAPPINGS:
                     self.error()
@@ -2814,10 +3051,11 @@ class ipadapterApplyEncoder(ipadapter):
     def INPUT_TYPES(cls):
         ipa_cls = cls()
         normal_presets = ipa_cls.normal_presets
-        max_embeds_num = 3
+        max_embeds_num = 4
         inputs = {
             "required": {
                 "model": ("MODEL",),
+                "clip_vision": ("CLIP_VISION",),
                 "image1": ("IMAGE",),
                 "preset": (normal_presets,),
                 "num_embeds":  ("INT", {"default": 2, "min": 1, "max": max_embeds_num}),
@@ -2837,8 +3075,8 @@ class ipadapterApplyEncoder(ipadapter):
         inputs["optional"]["neg_embeds"] = ("EMBEDS",)
         return inputs
 
-    RETURN_TYPES = ("MODEL", "IPADAPTER", "EMBEDS", "EMBEDS", )
-    RETURN_NAMES = ("model", "ipadapter", "pos_embed", "neg_embed", )
+    RETURN_TYPES = ("MODEL", "CLIP_VISION","IPADAPTER", "EMBEDS", "EMBEDS", )
+    RETURN_NAMES = ("model", "clip_vision","ipadapter", "pos_embed", "neg_embed",)
     CATEGORY = "EasyUse/Adapter"
     FUNCTION = "apply"
 
@@ -2868,16 +3106,16 @@ class ipadapterApplyEncoder(ipadapter):
 
     def apply(self, **kwargs):
         model = kwargs['model']
+        clip_vision = kwargs['clip_vision']
         preset = kwargs['preset']
         if 'optional_ipadapter' in kwargs:
             ipadapter = kwargs['optional_ipadapter']
         else:
-            model, ipadapter = self.load_model(model, preset, 0, 'CPU', clip_vision=None, optional_ipadapter=None, cache_mode='none')
+            model, ipadapter = self.load_model(model, preset, 0, 'CPU', clip_vision=clip_vision, optional_ipadapter=None, cache_mode='none')
 
         if "IPAdapterEncoder" not in ALL_NODE_CLASS_MAPPINGS:
             self.error()
         encoder_cls = ALL_NODE_CLASS_MAPPINGS["IPAdapterEncoder"]
-
         pos_embeds = kwargs["pos_embeds"] if "pos_embeds" in kwargs else []
         neg_embeds = kwargs["neg_embeds"] if "neg_embeds" in kwargs else []
         for i in range(1, kwargs['num_embeds'] + 1):
@@ -2886,14 +3124,14 @@ class ipadapterApplyEncoder(ipadapter):
             kwargs[f"mask{i}"] = kwargs[f"mask{i}"] if f"mask{i}" in kwargs else None
             kwargs[f"weight{i}"] = kwargs[f"weight{i}"] if f"weight{i}" in kwargs else 1.0
 
-            pos, neg = encoder_cls().encode(ipadapter, kwargs[f"image{i}"], kwargs[f"weight{i}"], kwargs[f"mask{i}"], clip_vision=None)
+            pos, neg = encoder_cls().encode(ipadapter, kwargs[f"image{i}"], kwargs[f"weight{i}"], kwargs[f"mask{i}"], clip_vision=clip_vision)
             pos_embeds.append(pos)
             neg_embeds.append(neg)
 
         pos_embeds = self.batch(pos_embeds, kwargs['combine_method'])
         neg_embeds = self.batch(neg_embeds, kwargs['combine_method'])
 
-        return (model, ipadapter, pos_embeds, neg_embeds)
+        return (model,clip_vision, ipadapter, pos_embeds, neg_embeds)
 
 class ipadapterApplyEmbeds(ipadapter):
     def __init__(self):
@@ -2907,6 +3145,7 @@ class ipadapterApplyEmbeds(ipadapter):
         return {
             "required": {
                 "model": ("MODEL",),
+                "clip_vision": ("CLIP_VISION",),
                 "ipadapter": ("IPADAPTER",),
                 "pos_embed": ("EMBEDS",),
                 "weight": ("FLOAT", {"default": 1.0, "min": -1, "max": 3, "step": 0.05}),
@@ -2927,12 +3166,12 @@ class ipadapterApplyEmbeds(ipadapter):
     CATEGORY = "EasyUse/Adapter"
     FUNCTION = "apply"
 
-    def apply(self, model, ipadapter, pos_embed, weight, weight_type, start_at, end_at, embeds_scaling, attn_mask=None, neg_embed=None,):
+    def apply(self, model, ipadapter, clip_vision, pos_embed, weight, weight_type, start_at, end_at, embeds_scaling, attn_mask=None, neg_embed=None,):
         if "IPAdapterEmbeds" not in ALL_NODE_CLASS_MAPPINGS:
             self.error()
 
         cls = ALL_NODE_CLASS_MAPPINGS["IPAdapterEmbeds"]
-        model, image = cls().apply_ipadapter(model, ipadapter, pos_embed, weight, weight_type, start_at, end_at, neg_embed=neg_embed, attn_mask=attn_mask, clip_vision=None, embeds_scaling=embeds_scaling)
+        model, image = cls().apply_ipadapter(model, ipadapter, pos_embed, weight, weight_type, start_at, end_at, neg_embed=neg_embed, attn_mask=attn_mask, clip_vision=clip_vision, embeds_scaling=embeds_scaling)
 
         return (model, ipadapter)
 
@@ -3217,6 +3456,8 @@ class instantIDApplyAdvanced(instantID):
 
         return self.run(pipe, image, instantid_file, insightface, control_net_name, cn_strength, cn_soft_weights, weight, start_at, end_at, noise, image_kps, mask, control_net, positive, negative, prompt, extra_pnginfo, my_unique_id)
 
+# ---------------------------------------------------------------适配器 结束----------------------------------------------------------------------#
+
 #---------------------------------------------------------------预采样 开始----------------------------------------------------------------------#
 
 # 预采样设置（基础）
@@ -3232,7 +3473,7 @@ class samplerSettings:
                      "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
                      "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}),
                      "sampler_name": (comfy.samplers.KSampler.SAMPLERS,),
-                     "scheduler": (comfy.samplers.KSampler.SCHEDULERS + ['align_your_steps'],),
+                     "scheduler": (comfy.samplers.KSampler.SCHEDULERS + new_schedulers,),
                      "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                      "seed": ("INT", {"default": 0, "min": 0, "max": MAX_SEED_NUM}),
                      },
@@ -3310,7 +3551,7 @@ class samplerSettingsAdvanced:
                      "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
                      "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}),
                      "sampler_name": (comfy.samplers.KSampler.SAMPLERS,),
-                     "scheduler": (comfy.samplers.KSampler.SCHEDULERS + ['align_your_steps'],),
+                     "scheduler": (comfy.samplers.KSampler.SCHEDULERS + new_schedulers,),
                      "start_at_step": ("INT", {"default": 0, "min": 0, "max": 10000}),
                      "end_at_step": ("INT", {"default": 10000, "min": 0, "max": 10000}),
                      "add_noise": (["enable", "disable"],),
@@ -3399,7 +3640,7 @@ class samplerSettingsNoiseIn:
                      "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
                      "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}),
                      "sampler_name": (comfy.samplers.KSampler.SAMPLERS,),
-                     "scheduler": (comfy.samplers.KSampler.SCHEDULERS+['align_your_steps'],),
+                     "scheduler": (comfy.samplers.KSampler.SCHEDULERS+new_schedulers,),
                      "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                      "seed": ("INT", {"default": 0, "min": 0, "max": MAX_SEED_NUM}),
                      },
@@ -3545,13 +3786,14 @@ class samplerCustomSettings:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required":
-                    {"pipe": ("PIPE_LINE",),
+        return {"required": {
+                     "pipe": ("PIPE_LINE",),
                      "guider": (['CFG','DualCFG','IP2P+DualCFG','Basic'],{"default":"Basic"}),
                      "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}),
                      "cfg_negative": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}),
                      "sampler_name": (comfy.samplers.KSampler.SAMPLERS + ['inversed_euler'],),
-                     "scheduler": (comfy.samplers.KSampler.SCHEDULERS + ['karrasADV','exponentialADV','polyExponential', 'sdturbo', 'vp', 'alignYourSteps'],),
+                     "scheduler": (comfy.samplers.KSampler.SCHEDULERS + ['karrasADV','exponentialADV','polyExponential', 'sdturbo', 'vp', 'alignYourSteps', 'gits'],),
+                     "coeff": ("FLOAT", {"default": 1.20, "min": 0.80, "max": 1.50, "step": 0.05}),
                      "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
                      "sigma_max": ("FLOAT", {"default": 14.614642, "min": 0.0, "max": 1000.0, "step": 0.01, "round": False}),
                      "sigma_min": ("FLOAT", {"default": 0.0291675, "min": 0.0, "max": 1000.0, "step": 0.01, "round": False}),
@@ -3563,7 +3805,7 @@ class samplerCustomSettings:
                      "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                      "add_noise": (["enable", "disable"], {"default": "enable"}),
                      "seed": ("INT", {"default": 0, "min": 0, "max": MAX_SEED_NUM}),
-                     },
+                 },
                 "optional": {
                     "image_to_latent": ("IMAGE",),
                     "latent": ("LATENT",),
@@ -3656,7 +3898,7 @@ class samplerCustomSettings:
             to["model_patch"] = {}
         return to
 
-    def settings(self, pipe, guider, cfg, cfg_negative, sampler_name, scheduler, steps, sigma_max, sigma_min, rho, beta_d, beta_min, eps_s, flip_sigmas, denoise, add_noise, seed, image_to_latent=None, latent=None, optional_sampler=None, optional_sigmas=None, prompt=None, extra_pnginfo=None, my_unique_id=None):
+    def settings(self, pipe, guider, cfg, cfg_negative, sampler_name, scheduler, coeff, steps, sigma_max, sigma_min, rho, beta_d, beta_min, eps_s, flip_sigmas, denoise, add_noise, seed, image_to_latent=None, latent=None, optional_sampler=None, optional_sigmas=None, prompt=None, extra_pnginfo=None, my_unique_id=None):
 
         # 图生图转换
         vae = pipe["vae"]
@@ -3683,13 +3925,12 @@ class samplerCustomSettings:
                 case 'sdturbo':
                     sigmas, = self.get_custom_cls('SDTurboScheduler').get_sigmas(model, steps, denoise)
                 case 'alignYourSteps':
-                    try:
-                        model_type = get_sd_version(model)
-                        if model_type == 'unknown':
-                            raise Exception("This Model not supported")
-                        sigmas, = alignYourStepsScheduler().get_sigmas(model_type.upper(), steps, denoise)
-                    except:
-                        raise Exception("Please update your ComfyUI")
+                    model_type = get_sd_version(model)
+                    if model_type == 'unknown':
+                        raise Exception("This Model not supported")
+                    sigmas, = alignYourStepsScheduler().get_sigmas(model_type.upper(), steps, denoise)
+                case 'gits':
+                    sigmas, = gitsScheduler().get_sigmas(coeff, steps, denoise)
                 case _:
                     sigmas, = self.get_custom_cls('BasicScheduler').get_sigmas(model, scheduler, steps, denoise)
 
@@ -4016,7 +4257,7 @@ class layerDiffusionSettings:
              "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
              "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}),
              "sampler_name": (comfy.samplers.KSampler.SAMPLERS, {"default": "euler"}),
-             "scheduler": (comfy.samplers.KSampler.SCHEDULERS+ ['align_your_steps'], {"default": "normal"}),
+             "scheduler": (comfy.samplers.KSampler.SCHEDULERS+ new_schedulers, {"default": "normal"}),
              "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
              "seed": ("INT", {"default": 0, "min": 0, "max": MAX_SEED_NUM}),
              },
@@ -4181,7 +4422,7 @@ class dynamicCFGSettings:
                      "cfg_mode": (DynThresh.Modes,),
                      "cfg_scale_min": ("FLOAT", {"default": 3.5, "min": 0.0, "max": 100.0, "step": 0.5}),
                      "sampler_name": (comfy.samplers.KSampler.SAMPLERS,),
-                     "scheduler": (comfy.samplers.KSampler.SCHEDULERS,),
+                     "scheduler": (comfy.samplers.KSampler.SCHEDULERS+new_schedulers,),
                      "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                      "seed": ("INT", {"default": 0, "min": 0, "max": MAX_SEED_NUM}),
                      },
@@ -4305,6 +4546,8 @@ class dynamicThresholdingFull:
         m.set_model_sampler_cfg_function(sampler_dyn_thresh)
         return (m,)
 
+#---------------------------------------------------------------预采样参数 结束----------------------------------------------------------------------
+
 #---------------------------------------------------------------采样器 开始----------------------------------------------------------------------
 
 # 完整采样器
@@ -4318,7 +4561,7 @@ class samplerFull:
                  "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
                  "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}),
                  "sampler_name": (comfy.samplers.KSampler.SAMPLERS,),
-                 "scheduler": (comfy.samplers.KSampler.SCHEDULERS+['align_your_steps'],),
+                 "scheduler": (comfy.samplers.KSampler.SCHEDULERS+new_schedulers,),
                  "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                  "image_output": (["Hide", "Preview", "Preview&Choose", "Save", "Hide&Save", "Sender", "Sender&Save"],),
                  "link_id": ("INT", {"default": 0, "min": 0, "max": sys.maxsize, "step": 1}),
@@ -4453,13 +4696,14 @@ class samplerFull:
                 noise = samp_custom['noise'] if 'noise' in samp_custom else None
                 samp_samples, _ = sampler.custom_advanced_ksampler(noise, guider, _sampler, sigmas, samp_samples)
             elif scheduler == 'align_your_steps':
-                try:
-                    model_type = get_sd_version(samp_model)
-                    if model_type == 'unknown':
-                        raise Exception("This Model not supported")
-                    sigmas, = alignYourStepsScheduler().get_sigmas(model_type.upper(), steps, denoise)
-                except:
-                    raise Exception("Please update your ComfyUI")
+                model_type = get_sd_version(samp_model)
+                if model_type == 'unknown':
+                    raise Exception("This Model not supported")
+                sigmas, = alignYourStepsScheduler().get_sigmas(model_type.upper(), steps, denoise)
+                _sampler = comfy.samplers.sampler_object(sampler_name)
+                samp_samples = sampler.custom_ksampler(samp_model, samp_seed, steps, cfg, _sampler, sigmas, samp_positive, samp_negative, samp_samples, disable_noise=disable_noise, preview_latent=preview_latent)
+            elif scheduler == 'gits':
+                sigmas, = gitsScheduler().get_sigmas(coeff=1.2, steps=steps, denoise=denoise)
                 _sampler = comfy.samplers.sampler_object(sampler_name)
                 samp_samples = sampler.custom_ksampler(samp_model, samp_seed, steps, cfg, _sampler, sigmas, samp_positive, samp_negative, samp_samples, disable_noise=disable_noise, preview_latent=preview_latent)
             else:
@@ -5406,6 +5650,8 @@ class unsampler:
 
         return (new_pipe, out,)
 
+#---------------------------------------------------------------采样器 结束----------------------------------------------------------------------
+
 #---------------------------------------------------------------修复 开始----------------------------------------------------------------------#
 
 # 高清修复
@@ -6010,9 +6256,10 @@ class samLoaderForDetailerFix:
         pipe = (sam_model, sam_detection_hint, sam_dilation, sam_threshold, sam_bbox_expansion, sam_mask_hint_threshold, sam_mask_hint_use_negative)
         return (pipe,)
 
-#---------------------------------------------------------------Pipe 开始----------------------------------------------------------------------#
+#---------------------------------------------------------------修复 结束----------------------------------------------------------------------
 
-# pipeIn
+#---------------------------------------------------------------节点束 开始----------------------------------------------------------------------#
+# 节点束输入
 class pipeIn:
     def __init__(self):
         pass
@@ -6097,7 +6344,7 @@ class pipeIn:
 
         return (new_pipe,)
 
-# pipeOut
+# 节点束输出
 class pipeOut:
     def __init__(self):
         pass
@@ -6129,8 +6376,7 @@ class pipeOut:
 
         return pipe, model, pos, neg, latent, vae, clip, image, seed
 
-
-# pipeEdit
+# 编辑节点束
 class pipeEdit:
     def __init__(self):
         pass
@@ -6252,7 +6498,7 @@ class pipeEdit:
         return (new_pipe, model,pos, neg, latent, vae, clip, image)
 
 
-# pipeToBasicPipe
+# 节点束到基础节点束（pipe to ComfyUI-Impack-pack's basic_pipe）
 class pipeToBasicPipe:
     @classmethod
     def INPUT_TYPES(s):
@@ -6274,7 +6520,7 @@ class pipeToBasicPipe:
         del pipe
         return (new_pipe,)
 
-# pipeBatchIndex
+# 批次索引
 class pipeBatchIndex:
     @classmethod
     def INPUT_TYPES(s):
@@ -6654,606 +6900,7 @@ class pipeXYPlotAdvanced:
 
         return pipeXYPlot().plot(grid_spacing, output_individuals, flip_xy, x_axis, x_values, y_axis, y_values, new_pipe)
 
-#---------------------------------------------------------------XY Inputs 开始----------------------------------------------------------------------#
-def load_preset(filename):
-    path = os.path.join(RESOURCES_DIR, filename)
-    path = os.path.abspath(path)
-    preset_list = []
-
-    if os.path.exists(path):
-        with open(path, 'r') as file:
-            for line in file:
-                preset_list.append(line.strip())
-
-        return preset_list
-    else:
-        return []
-def generate_floats(batch_count, first_float, last_float):
-    if batch_count > 1:
-        interval = (last_float - first_float) / (batch_count - 1)
-        values = [str(round(first_float + i * interval, 3)) for i in range(batch_count)]
-    else:
-        values = [str(first_float)] if batch_count == 1 else []
-    return "; ".join(values)
-
-def generate_ints(batch_count, first_int, last_int):
-    if batch_count > 1:
-        interval = (last_int - first_int) / (batch_count - 1)
-        values = [str(int(first_int + i * interval)) for i in range(batch_count)]
-    else:
-        values = [str(first_int)] if batch_count == 1 else []
-    # values = list(set(values))  # Remove duplicates
-    # values.sort()  # Sort in ascending order
-    return "; ".join(values)
-
-# Seed++ Batch
-class XYplot_SeedsBatch:
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {"required": {
-            "batch_count": ("INT", {"default": 3, "min": 1, "max": 50}), },
-        }
-
-    RETURN_TYPES = ("X_Y",)
-    RETURN_NAMES = ("X or Y",)
-    FUNCTION = "xy_value"
-    CATEGORY = "EasyUse/XY Inputs"
-
-    def xy_value(self, batch_count):
-
-        axis = "advanced: Seeds++ Batch"
-        xy_values = {"axis": axis, "values": batch_count}
-        return (xy_values,)
-
-# Step Values
-class XYplot_Steps:
-    parameters = ["steps", "start_at_step", "end_at_step",]
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "target_parameter": (cls.parameters,),
-                "batch_count": ("INT", {"default": 3, "min": 0, "max": 50}),
-                "first_step": ("INT", {"default": 10, "min": 1, "max": 10000}),
-                "last_step": ("INT", {"default": 20, "min": 1, "max": 10000}),
-                "first_start_step": ("INT", {"default": 0, "min": 0, "max": 10000}),
-                "last_start_step": ("INT", {"default": 10, "min": 0, "max": 10000}),
-                "first_end_step": ("INT", {"default": 10, "min": 0, "max": 10000}),
-                "last_end_step": ("INT", {"default": 20, "min": 0, "max": 10000}),
-            }
-        }
-
-    RETURN_TYPES = ("X_Y",)
-    RETURN_NAMES = ("X or Y",)
-    FUNCTION = "xy_value"
-    CATEGORY = "EasyUse/XY Inputs"
-
-    def xy_value(self, target_parameter, batch_count, first_step, last_step, first_start_step, last_start_step,
-                 first_end_step, last_end_step,):
-
-        axis, xy_first, xy_last = None, None, None
-
-        if target_parameter == "steps":
-            axis = "advanced: Steps"
-            xy_first = first_step
-            xy_last = last_step
-        elif target_parameter == "start_at_step":
-            axis = "advanced: StartStep"
-            xy_first = first_start_step
-            xy_last = last_start_step
-        elif target_parameter == "end_at_step":
-            axis = "advanced: EndStep"
-            xy_first = first_end_step
-            xy_last = last_end_step
-
-        values = generate_ints(batch_count, xy_first, xy_last)
-        return ({"axis": axis, "values": values},) if values is not None else (None,)
-
-class XYplot_CFG:
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "batch_count": ("INT", {"default": 3, "min": 0, "max": 50}),
-                "first_cfg": ("FLOAT", {"default": 7.0, "min": 0.0, "max": 100.0}),
-                "last_cfg": ("FLOAT", {"default": 9.0, "min": 0.0, "max": 100.0}),
-            }
-        }
-
-    RETURN_TYPES = ("X_Y",)
-    RETURN_NAMES = ("X or Y",)
-    FUNCTION = "xy_value"
-    CATEGORY = "EasyUse/XY Inputs"
-
-    def xy_value(self, batch_count, first_cfg, last_cfg):
-        axis = "advanced: CFG Scale"
-        values = generate_floats(batch_count, first_cfg, last_cfg)
-        return ({"axis": axis, "values": values},) if values else (None,)
-
-# Step Values
-class XYplot_Sampler_Scheduler:
-    parameters = ["sampler", "scheduler", "sampler & scheduler"]
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        samplers = ["None"] + comfy.samplers.KSampler.SAMPLERS
-        schedulers = ["None"] + comfy.samplers.KSampler.SCHEDULERS
-        inputs = {
-            "required": {
-                "target_parameter": (cls.parameters,),
-                "input_count": ("INT", {"default": 1, "min": 1, "max": 30, "step": 1})
-            }
-        }
-        for i in range(1, 30 + 1):
-            inputs["required"][f"sampler_{i}"] = (samplers,)
-            inputs["required"][f"scheduler_{i}"] = (schedulers,)
-
-        return inputs
-
-    RETURN_TYPES = ("X_Y",)
-    RETURN_NAMES = ("X or Y",)
-    FUNCTION = "xy_value"
-    CATEGORY = "EasyUse/XY Inputs"
-
-    def xy_value(self, target_parameter, input_count, **kwargs):
-        axis, values, = None, None,
-        if target_parameter == "scheduler":
-            axis = "advanced: Scheduler"
-            schedulers = [kwargs.get(f"scheduler_{i}") for i in range(1, input_count + 1)]
-            values = [scheduler for scheduler in schedulers if scheduler != "None"]
-        elif target_parameter == "sampler":
-            axis = "advanced: Sampler"
-            samplers = [kwargs.get(f"sampler_{i}") for i in range(1, input_count + 1)]
-            values = [sampler for sampler in samplers if sampler != "None"]
-        else:
-            axis = "advanced: Sampler&Scheduler"
-            samplers = [kwargs.get(f"sampler_{i}") for i in range(1, input_count + 1)]
-            schedulers = [kwargs.get(f"scheduler_{i}") for i in range(1, input_count + 1)]
-            values = []
-            for sampler, scheduler in zip(samplers, schedulers):
-                sampler = sampler if sampler else 'None'
-                scheduler = scheduler if scheduler else 'None'
-                values.append(sampler +', '+ scheduler)
-        values = "; ".join(values)
-        return ({"axis": axis, "values": values},) if values else (None,)
-
-class XYplot_Denoise:
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "batch_count": ("INT", {"default": 3, "min": 0, "max": 50}),
-                "first_denoise": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.1}),
-                "last_denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.1}),
-            }
-        }
-
-    RETURN_TYPES = ("X_Y",)
-    RETURN_NAMES = ("X or Y",)
-    FUNCTION = "xy_value"
-    CATEGORY = "EasyUse/XY Inputs"
-
-    def xy_value(self, batch_count, first_denoise, last_denoise):
-        axis = "advanced: Denoise"
-        values = generate_floats(batch_count, first_denoise, last_denoise)
-        return ({"axis": axis, "values": values},) if values else (None,)
-
-# PromptSR
-class XYplot_PromptSR:
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        inputs = {
-            "required": {
-                "target_prompt": (["positive", "negative"],),
-                "search_txt": ("STRING", {"default": "", "multiline": False}),
-                "replace_all_text": ("BOOLEAN", {"default": False}),
-                "replace_count": ("INT", {"default": 3, "min": 1, "max": 30 - 1}),
-            }
-        }
-
-        # Dynamically add replace_X inputs
-        for i in range(1, 30):
-            replace_key = f"replace_{i}"
-            inputs["required"][replace_key] = ("STRING", {"default": "", "multiline": False, "placeholder": replace_key})
-
-        return inputs
-
-    RETURN_TYPES = ("X_Y",)
-    RETURN_NAMES = ("X or Y",)
-    FUNCTION = "xy_value"
-    CATEGORY = "EasyUse/XY Inputs"
-
-    def xy_value(self, target_prompt, search_txt, replace_all_text, replace_count, **kwargs):
-        axis = None
-
-        if target_prompt == "positive":
-            axis = "advanced: Positive Prompt S/R"
-        elif target_prompt == "negative":
-            axis = "advanced: Negative Prompt S/R"
-
-        # Create base entry
-        values = [(search_txt, None, replace_all_text)]
-
-        if replace_count > 0:
-            # Append additional entries based on replace_count
-            values.extend([(search_txt, kwargs.get(f"replace_{i+1}"), replace_all_text) for i in range(replace_count)])
-        return ({"axis": axis, "values": values},) if values is not None else (None,)
-
-# XYPlot Pos Condition
-class XYplot_Positive_Cond:
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        inputs = {
-            "optional": {
-                "positive_1": ("CONDITIONING",),
-                "positive_2": ("CONDITIONING",),
-                "positive_3": ("CONDITIONING",),
-                "positive_4": ("CONDITIONING",),
-            }
-        }
-
-        return inputs
-
-    RETURN_TYPES = ("X_Y",)
-    RETURN_NAMES = ("X or Y",)
-    FUNCTION = "xy_value"
-    CATEGORY = "EasyUse/XY Inputs"
-
-    def xy_value(self, positive_1=None, positive_2=None, positive_3=None, positive_4=None):
-        axis = "advanced: Pos Condition"
-        values = []
-        cond = []
-        # Create base entry
-        if positive_1 is not None:
-            values.append("0")
-            cond.append(positive_1)
-        if positive_2 is not None:
-            values.append("1")
-            cond.append(positive_2)
-        if positive_3 is not None:
-            values.append("2")
-            cond.append(positive_3)
-        if positive_4 is not None:
-            values.append("3")
-            cond.append(positive_4)
-
-        return ({"axis": axis, "values": values, "cond": cond},) if values is not None else (None,)
-
-# XYPlot Neg Condition
-class XYplot_Negative_Cond:
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        inputs = {
-            "optional": {
-                "negative_1": ("CONDITIONING"),
-                "negative_2": ("CONDITIONING"),
-                "negative_3": ("CONDITIONING"),
-                "negative_4": ("CONDITIONING"),
-            }
-        }
-
-        return inputs
-
-    RETURN_TYPES = ("X_Y",)
-    RETURN_NAMES = ("X or Y",)
-    FUNCTION = "xy_value"
-    CATEGORY = "EasyUse/XY Inputs"
-
-    def xy_value(self, negative_1=None, negative_2=None, negative_3=None, negative_4=None):
-        axis = "advanced: Neg Condition"
-        values = []
-        cond = []
-        # Create base entry
-        if negative_1 is not None:
-            values.append(0)
-            cond.append(negative_1)
-        if negative_2 is not None:
-            values.append(1)
-            cond.append(negative_2)
-        if negative_3 is not None:
-            values.append(2)
-            cond.append(negative_3)
-        if negative_4 is not None:
-            values.append(3)
-            cond.append(negative_4)
-
-        return ({"axis": axis, "values": values, "cond": cond},) if values is not None else (None,)
-
-# XYPlot Pos Condition List
-class XYplot_Positive_Cond_List:
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "positive": ("CONDITIONING",),
-            }
-        }
-
-    INPUT_IS_LIST = True
-    RETURN_TYPES = ("X_Y",)
-    RETURN_NAMES = ("X or Y",)
-    FUNCTION = "xy_value"
-    CATEGORY = "EasyUse/XY Inputs"
-
-    def xy_value(self, positive):
-        axis = "advanced: Pos Condition"
-        values = []
-        cond = []
-        for index, c in enumerate(positive):
-            values.append(str(index))
-            cond.append(c)
-
-        return ({"axis": axis, "values": values, "cond": cond},) if values is not None else (None,)
-
-# XYPlot Neg Condition List
-class XYplot_Negative_Cond_List:
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "negative": ("CONDITIONING",),
-            }
-        }
-
-    INPUT_IS_LIST = True
-    RETURN_TYPES = ("X_Y",)
-    RETURN_NAMES = ("X or Y",)
-    FUNCTION = "xy_value"
-    CATEGORY = "EasyUse/XY Inputs"
-
-    def xy_value(self, negative):
-        axis = "advanced: Neg Condition"
-        values = []
-        cond = []
-        for index, c in enumerate(negative):
-            values.append(index)
-            cond.append(c)
-
-        return ({"axis": axis, "values": values, "cond": cond},) if values is not None else (None,)
-
-# XY Plot: ControlNet
-class XYplot_Control_Net:
-    parameters = ["strength", "start_percent", "end_percent"]
-    @classmethod
-    def INPUT_TYPES(cls):
-        def get_file_list(filenames):
-            return [file for file in filenames if file != "put_models_here.txt" and "lllite" not in file]
-
-        return {
-            "required": {
-                "control_net_name": (get_file_list(folder_paths.get_filename_list("controlnet")),),
-                "image": ("IMAGE",),
-                "target_parameter": (cls.parameters,),
-                "batch_count": ("INT", {"default": 3, "min": 1, "max": 30}),
-                "first_strength": ("FLOAT", {"default": 0.0, "min": 0.00, "max": 10.0, "step": 0.01}),
-                "last_strength": ("FLOAT", {"default": 1.0, "min": 0.00, "max": 10.0, "step": 0.01}),
-                "first_start_percent": ("FLOAT", {"default": 0.0, "min": 0.00, "max": 1.0, "step": 0.01}),
-                "last_start_percent": ("FLOAT", {"default": 1.0, "min": 0.00, "max": 1.0, "step": 0.01}),
-                "first_end_percent": ("FLOAT", {"default": 0.0, "min": 0.00, "max": 1.0, "step": 0.01}),
-                "last_end_percent": ("FLOAT", {"default": 1.0, "min": 0.00, "max": 1.0, "step": 0.01}),
-                "strength": ("FLOAT", {"default": 1.0, "min": 0.00, "max": 10.0, "step": 0.01}),
-                "start_percent": ("FLOAT", {"default": 0.0, "min": 0.00, "max": 1.0, "step": 0.01}),
-                "end_percent": ("FLOAT", {"default": 1.0, "min": 0.00, "max": 1.0, "step": 0.01}),
-            },
-        }
-
-    RETURN_TYPES = ("X_Y",)
-    RETURN_NAMES = ("X or Y",)
-    FUNCTION = "xy_value"
-    CATEGORY = "EasyUse/XY Inputs"
-
-    def xy_value(self, control_net_name, image, target_parameter, batch_count, first_strength, last_strength, first_start_percent,
-                 last_start_percent, first_end_percent, last_end_percent, strength, start_percent, end_percent):
-
-        axis, = None,
-
-        values = []
-
-        if target_parameter == "strength":
-            axis = "advanced: ControlNetStrength"
-
-            values.append([(control_net_name, image, first_strength, start_percent, end_percent)])
-            strength_increment = (last_strength - first_strength) / (batch_count - 1) if batch_count > 1 else 0
-            for i in range(1, batch_count - 1):
-                values.append([(control_net_name, image, first_strength + i * strength_increment, start_percent,
-                                end_percent)])
-            if batch_count > 1:
-                values.append([(control_net_name, image, last_strength, start_percent, end_percent)])
-
-        elif target_parameter == "start_percent":
-            axis = "advanced: ControlNetStart%"
-
-            percent_increment = (last_start_percent - first_start_percent) / (batch_count - 1) if batch_count > 1 else 0
-            values.append([(control_net_name, image, strength, first_start_percent, end_percent)])
-            for i in range(1, batch_count - 1):
-                values.append([(control_net_name, image, strength, first_start_percent + i * percent_increment,
-                                  end_percent)])
-
-            # Always add the last start_percent if batch_count is more than 1.
-            if batch_count > 1:
-                values.append((control_net_name, image, strength, last_start_percent, end_percent))
-
-        elif target_parameter == "end_percent":
-            axis = "advanced: ControlNetEnd%"
-
-            percent_increment = (last_end_percent - first_end_percent) / (batch_count - 1) if batch_count > 1 else 0
-            values.append([(control_net_name, image, image, strength, start_percent, first_end_percent)])
-            for i in range(1, batch_count - 1):
-                values.append([(control_net_name, image, strength, start_percent,
-                                  first_end_percent + i * percent_increment)])
-
-            if batch_count > 1:
-                values.append([(control_net_name, image, strength, start_percent, last_end_percent)])
-
-
-        return ({"axis": axis, "values": values},)
-
-
-#Checkpoints
-class XYplot_Checkpoint:
-
-    modes = ["Ckpt Names", "Ckpt Names+ClipSkip", "Ckpt Names+ClipSkip+VAE"]
-
-    @classmethod
-    def INPUT_TYPES(cls):
-
-        checkpoints = ["None"] + folder_paths.get_filename_list("checkpoints")
-        vaes = ["Baked VAE"] + folder_paths.get_filename_list("vae")
-
-        inputs = {
-            "required": {
-                "input_mode": (cls.modes,),
-                "ckpt_count": ("INT", {"default": 3, "min": 0, "max": 10, "step": 1}),
-            }
-        }
-
-        for i in range(1, 10 + 1):
-            inputs["required"][f"ckpt_name_{i}"] = (checkpoints,)
-            inputs["required"][f"clip_skip_{i}"] = ("INT", {"default": -1, "min": -24, "max": -1, "step": 1})
-            inputs["required"][f"vae_name_{i}"] = (vaes,)
-
-        inputs["optional"] = {
-            "optional_lora_stack": ("LORA_STACK",)
-        }
-        return inputs
-
-    RETURN_TYPES = ("X_Y",)
-    RETURN_NAMES = ("X or Y",)
-    FUNCTION = "xy_value"
-
-    CATEGORY = "EasyUse/XY Inputs"
-
-    def xy_value(self, input_mode, ckpt_count, **kwargs):
-
-        axis = "advanced: Checkpoint"
-
-        checkpoints = [kwargs.get(f"ckpt_name_{i}") for i in range(1, ckpt_count + 1)]
-        clip_skips = [kwargs.get(f"clip_skip_{i}") for i in range(1, ckpt_count + 1)]
-        vaes = [kwargs.get(f"vae_name_{i}") for i in range(1, ckpt_count + 1)]
-
-        # Set None for Clip Skip and/or VAE if not correct modes
-        for i in range(ckpt_count):
-            if "ClipSkip" not in input_mode:
-                clip_skips[i] = 'None'
-            if "VAE" not in input_mode:
-                vaes[i] = 'None'
-
-        # Extend each sub-array with lora_stack if it's not None
-        values = [checkpoint.replace(',', '*')+','+str(clip_skip)+','+vae.replace(',', '*') for checkpoint, clip_skip, vae in zip(checkpoints, clip_skips, vaes) if
-                        checkpoint != "None"]
-
-        optional_lora_stack = kwargs.get("optional_lora_stack") if "optional_lora_stack" in kwargs else []
-
-        xy_values = {"axis": axis, "values": values, "lora_stack": optional_lora_stack}
-        return (xy_values,)
-
-#Loras
-class XYplot_Lora:
-
-    modes = ["Lora Names", "Lora Names+Weights"]
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        loras = ["None"] + folder_paths.get_filename_list("loras")
-
-        inputs = {
-            "required": {
-                "input_mode": (cls.modes,),
-                "lora_count": ("INT", {"default": 3, "min": 0, "max": 10, "step": 1}),
-                "model_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
-                "clip_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
-            }
-        }
-
-        for i in range(1, 10 + 1):
-            inputs["required"][f"lora_name_{i}"] = (loras,)
-            inputs["required"][f"model_str_{i}"] = ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01})
-            inputs["required"][f"clip_str_{i}"] = ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01})
-
-        inputs["optional"] = {
-            "optional_lora_stack": ("LORA_STACK",)
-        }
-        return inputs
-
-    RETURN_TYPES = ("X_Y",)
-    RETURN_NAMES = ("X or Y",)
-    FUNCTION = "xy_value"
-
-    CATEGORY = "EasyUse/XY Inputs"
-
-    def xy_value(self, input_mode, lora_count, model_strength, clip_strength, **kwargs):
-
-        axis = "advanced: Lora"
-        # Extract values from kwargs
-        loras = [kwargs.get(f"lora_name_{i}") for i in range(1, lora_count + 1)]
-        model_strs = [kwargs.get(f"model_str_{i}", model_strength) for i in range(1, lora_count + 1)]
-        clip_strs = [kwargs.get(f"clip_str_{i}", clip_strength) for i in range(1, lora_count + 1)]
-
-        # Use model_strength and clip_strength for the loras where values are not provided
-        if "Weights" not in input_mode:
-            for i in range(lora_count):
-                model_strs[i] = model_strength
-                clip_strs[i] = clip_strength
-
-        # Extend each sub-array with lora_stack if it's not None
-        values = [lora.replace(',', '*')+','+str(model_str)+','+str(clip_str) for lora, model_str, clip_str
-                    in zip(loras, model_strs, clip_strs) if lora != "None"]
-
-        optional_lora_stack = kwargs.get("optional_lora_stack") if "optional_lora_stack" in kwargs else []
-
-        print(values)
-        xy_values = {"axis": axis, "values": values, "lora_stack": optional_lora_stack}
-        return (xy_values,)
-
-# 模型叠加
-class XYplot_ModelMergeBlocks:
-
-    @classmethod
-    def INPUT_TYPES(s):
-        checkpoints = folder_paths.get_filename_list("checkpoints")
-        vae = ["Use Model 1", "Use Model 2"] + folder_paths.get_filename_list("vae")
-
-        preset = ["Preset"]  # 20
-        preset += load_preset("mmb-preset.txt")
-        preset += load_preset("mmb-preset.custom.txt")
-
-        default_vectors = "1,0,0; \n0,1,0; \n0,0,1; \n1,1,0; \n1,0,1; \n0,1,1; "
-        return {
-            "required": {
-                "ckpt_name_1": (checkpoints,),
-                "ckpt_name_2": (checkpoints,),
-                "vae_use": (vae, {"default": "Use Model 1"}),
-                "preset": (preset, {"default": "preset"}),
-                "values": ("STRING", {"default": default_vectors, "multiline": True, "placeholder": 'Support 2 methods:\n\n1.input, middle, out in same line and insert values seperated by "; "\n\n2.model merge block number seperated by ", " in same line and insert values seperated by "; "'}),
-            },
-            "hidden": {"my_unique_id": "UNIQUE_ID"}
-        }
-
-    RETURN_TYPES = ("X_Y",)
-    RETURN_NAMES = ("X or Y",)
-    FUNCTION = "xy_value"
-
-    CATEGORY = "EasyUse/XY Inputs"
-
-    def xy_value(self, ckpt_name_1, ckpt_name_2, vae_use, preset, values, my_unique_id=None):
-
-        axis = "advanced: ModelMergeBlocks"
-        if ckpt_name_1 is None:
-            raise Exception("ckpt_name_1 is not found")
-        if ckpt_name_2 is None:
-            raise Exception("ckpt_name_2 is not found")
-
-        models = (ckpt_name_1, ckpt_name_2)
-
-        xy_values = {"axis":axis, "values":values, "models":models, "vae_use": vae_use}
-        return (xy_values,)
+#---------------------------------------------------------------节点束 结束----------------------------------------------------------------------
 
 # 显示推理时间
 class showSpentTime:
@@ -7332,6 +6979,38 @@ class showLoaderSettingsNames:
         return {"ui": {"text": names}, "result": (ckpt_name, vae_name, lora_name)}
 
 
+class sliderControl:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "mode": (['ipadapter layer weights'],),
+                "model_type": (['sdxl', 'sd1'],),
+            },
+            "hidden": {
+                "prompt": "PROMPT",
+                "my_unique_id": "UNIQUE_ID",
+                "extra_pnginfo": "EXTRA_PNGINFO",
+            },
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("layer_weights",)
+
+    FUNCTION = "control"
+    OUTPUT_NODE = True
+
+    CATEGORY = "EasyUse/Util"
+
+    def control(self, mode, model_type, prompt=None, my_unique_id=None, extra_pnginfo=None):
+        values = ''
+        if my_unique_id in prompt:
+            print(prompt[my_unique_id])
+            if 'values' in prompt[my_unique_id]["inputs"]:
+                values = prompt[my_unique_id]["inputs"]['values']
+
+        return (values,)
+
 #---------------------------------------------------------------API 开始----------------------------------------------------------------------#
 from .libs.stability import stableAPI
 class stableDiffusion3API:
@@ -7371,6 +7050,8 @@ class stableDiffusion3API:
         output_image = stableAPI.generate_sd3_image(positive, negative, aspect_ratio, seed=seed, mode=mode, model=model, strength=denoise, image=optional_image)
         return (output_image,)
 
+#---------------------------------------------------------------API 结束----------------------------------------------------------------------
+
 
 NODE_CLASS_MAPPINGS = {
     # seed 随机种
@@ -7396,6 +7077,7 @@ NODE_CLASS_MAPPINGS = {
     "easy zero123Loader": zero123Loader,
     "easy dynamiCrafterLoader": dynamiCrafterLoader,
     "easy cascadeLoader": cascadeLoader,
+    "easy hunyuanDiTLoader": hunyuanDiTLoader,
     "easy loraStack": loraStack,
     "easy controlnetStack": controlnetStack,
     "easy controlnetLoader": controlnetSimple,
@@ -7417,6 +7099,7 @@ NODE_CLASS_MAPPINGS = {
     "easy applyFooocusInpaint": applyFooocusInpaint,
     "easy applyBrushNet": applyBrushNet,
     "easy applyPowerPaint": applyPowerPaint,
+    "easy applyInpaint": applyInpaint,
     # latent 潜空间
     "easy latentNoisy": latentNoisy,
     "easy latentCompositeMaskedWithCond": latentCompositeMaskedWithCond,
@@ -7475,6 +7158,7 @@ NODE_CLASS_MAPPINGS = {
     # others 其他
     "easy showSpentTime": showSpentTime,
     "easy showLoaderSettingsNames": showLoaderSettingsNames,
+    "easy sliderControl": sliderControl,
     "dynamicThresholdingFull": dynamicThresholdingFull,
     # api 相关
     "easy stableDiffusion3API": stableDiffusion3API,
@@ -7507,6 +7191,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "easy zero123Loader": "EasyLoader (Zero123)",
     "easy dynamiCrafterLoader": "EasyLoader (DynamiCrafter)",
     "easy cascadeLoader": "EasyCascadeLoader",
+    "easy hunyuanDiTLoader": "EasyLoader (HunYuanDiT)",
     "easy loraStack": "EasyLoraStack",
     "easy controlnetStack": "EasyControlnetStack",
     "easy controlnetLoader": "EasyControlnet",
@@ -7528,6 +7213,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "easy applyFooocusInpaint": "Easy Apply Fooocus Inpaint",
     "easy applyBrushNet": "Easy Apply BrushNet",
     "easy applyPowerPaint": "Easy Apply PowerPaint",
+    "easy applyInpaint": "Easy Apply Inpaint",
     # latent 潜空间
     "easy latentNoisy": "LatentNoisy",
     "easy latentCompositeMaskedWithCond": "LatentCompositeMaskedWithCond",
@@ -7586,6 +7272,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     # others 其他
     "easy showSpentTime": "Show Spent Time",
     "easy showLoaderSettingsNames": "Show Loader Settings Names",
+    "easy sliderControl": "Easy Slider Control",
     "dynamicThresholdingFull": "DynamicThresholdingFull",
     # api 相关
     "easy stableDiffusion3API": "Stable Diffusion 3 (API)",

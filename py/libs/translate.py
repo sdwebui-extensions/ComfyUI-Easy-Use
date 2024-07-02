@@ -1,3 +1,5 @@
+#credit to shadowcz007 for this module
+#from https://github.com/shadowcz007/comfyui-mixlab-nodes/blob/main/nodes/TextGenerateNode.py
 import re
 import os
 import folder_paths
@@ -125,8 +127,6 @@ class ChinesePromptTranslate(Transformer):
     def embedding(self, *args):
         print('prompt embedding', args[0])
         if len(args) == 1:
-            # print('prompt embedding',str(args[0]))
-            # 只传递了一个参数，意味着只有embedding名称没有数字
             embedding_name = str(args[0])
             return f"embedding:{embedding_name}"
         elif len(args) > 1:
@@ -165,14 +165,23 @@ class ChinesePromptTranslate(Transformer):
 
     def word(self, word):
         # Translate each word using the dictionary
-        if re.search(r'__.*?__', str(word)):
-            return str(word).rstrip('.')
-        elif re.search(r'@.*?@', str(word)):
-            return str(word).replace('@', '').rstrip('.')
-        elif detect_language(str(word)) == "cn":
-            return translate(str(word)).rstrip('.')
+        word = str(word)
+        match_cn = re.search(r'@.*?@', word)
+        if re.search(r'__.*?__', word):
+            return word.rstrip('.')
+        elif match_cn:
+            chinese = match_cn.group()
+            before = word.split('@', 1)
+            before = before[0] if len(before) > 0 else ''
+            before = translate(str(before)).rstrip('.') if before else ''
+            after = word.rsplit('@', 1)
+            after = after[len(after)-1] if len(after) > 1 else ''
+            after = translate(after).rstrip('.') if after else ''
+            return before + chinese.replace('@', '').rstrip('.') + after
+        elif detect_language(word) == "cn":
+            return translate(word).rstrip('.')
         else:
-            return str(word).rstrip('.')
+            return word.rstrip('.')
 
 
 #定义Prompt文法

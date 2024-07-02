@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw, ImageFilter
 from torchvision.transforms import Resize, CenterCrop, GaussianBlur
 from torchvision.transforms.functional import to_pil_image
 from .libs.log import log_node_info
+from .libs.utils import AlwaysEqualProxy
 from .libs.image import pil2tensor, tensor2pil, ResizeMode, get_new_bounds, RGB2RGBA, image2mask
 from .libs.colorfix import adain_color_fix, wavelet_color_fix
 from .libs.chooser import ChooserMessage, ChooserCancelled
@@ -506,6 +507,48 @@ class JoinImageBatch:
       image = torch.transpose(torch.transpose(images, 1, 2).reshape(1, n * w, h, c), 1, 2)
     return (image,)
 
+class imageListToImageBatch:
+  @classmethod
+  def INPUT_TYPES(s):
+    return {"required": {
+      "images": ("IMAGE",),
+    }}
+
+  INPUT_IS_LIST = True
+
+  RETURN_TYPES = ("IMAGE",)
+  FUNCTION = "doit"
+
+  CATEGORY = "EasyUse/Image"
+
+  def doit(self, images):
+    if len(images) <= 1:
+      return (images[0],)
+    else:
+      image1 = images[0]
+      for image2 in images[1:]:
+        if image1.shape[1:] != image2.shape[1:]:
+          image2 = comfy.utils.common_upscale(image2.movedim(-1, 1), image1.shape[2], image1.shape[1], "lanczos",
+                                              "center").movedim(1, -1)
+        image1 = torch.cat((image1, image2), dim=0)
+      return (image1,)
+
+
+class imageBatchToImageList:
+  @classmethod
+  def INPUT_TYPES(s):
+    return {"required": {"image": ("IMAGE",), }}
+
+  RETURN_TYPES = ("IMAGE",)
+  OUTPUT_IS_LIST = (True,)
+  FUNCTION = "doit"
+
+  CATEGORY = "EasyUse/Image"
+
+  def doit(self, image):
+    images = [image[i:i + 1, ...] for i in range(image.shape[0])]
+    return (images,)
+
 # 图像拆分
 class imageSplitList:
   @classmethod
@@ -755,7 +798,11 @@ class imageChooser(PreviewImage):
     mode = kwargs.pop('mode', 'Always Pause')
     last_choosen = None
     if mode == 'Keep Last Selection':
-      if id and extra_pnginfo[0] and "workflow" in extra_pnginfo[0]:
+      if not extra_pnginfo:
+        print("Error: extra_pnginfo is empty")
+      elif (not isinstance(extra_pnginfo[0], dict) or "workflow" not in extra_pnginfo[0]):
+        print("Error: extra_pnginfo[0] is not a dict or missing 'workflow' key")
+      else:
         workflow = extra_pnginfo[0]["workflow"]
         node = next((x for x in workflow["nodes"] if str(x["id"]) == id), None)
         if node:
@@ -1414,10 +1461,15 @@ class imageToBase64:
       return {"result": (base64_str,)}
 
 class removeLocalImage:
+
+  def __init__(self):
+    self.hasFile = False
+
   @classmethod
   def INPUT_TYPES(s):
       return {
         "required": {
+          "any": (AlwaysEqualProxy("*"),),
           "file_name": ("STRING",{"default":""}),
         },
       }
@@ -1427,15 +1479,27 @@ class removeLocalImage:
   FUNCTION = "remove"
   CATEGORY = "EasyUse/Image"
 
-  def remove(self, file_name):
-    hasFile = False
-    for file in os.listdir(folder_paths.input_directory):
-      name_without_extension, file_extension = os.path.splitext(file)
-      if name_without_extension == file_name or file == file_name:
-        os.remove(os.path.join(folder_paths.input_directory, file))
-        hasFile = True
-        break
-    if hasFile:
+
+
+  def remove(self, any, file_name):
+    self.hasFile = False
+    def listdir(path, dir_name=''):
+      for file in os.listdir(path):
+        file_path = os.path.join(path, file)
+        if os.path.isdir(file_path):
+          dir_name = os.path.basename(file_path)
+          listdir(file_path, dir_name)
+        else:
+          file = os.path.join(dir_name, file)
+          name_without_extension, file_extension = os.path.splitext(file)
+          if name_without_extension == file_name or file == file_name:
+            os.remove(os.path.join(folder_paths.input_directory, file))
+            self.hasFile = True
+            break
+
+    listdir(folder_paths.input_directory, '')
+
+    if self.hasFile:
       PromptServer.instance.send_sync("easyuse-toast", {"content": "Removed SuccessFully", "type":'success'})
     else:
       PromptServer.instance.send_sync("easyuse-toast", {"content": "Removed Failed", "type": 'error'})
@@ -1497,6 +1561,8 @@ NODE_CLASS_MAPPINGS = {
   "easy imageRatio": imageRatio,
   "easy imageToMask": imageToMask,
   "easy imageConcat": imageConcat,
+  "easy imageListToImageBatch": imageListToImageBatch,
+  "easy imageBatchToImageList": imageBatchToImageList,
   "easy imageSplitList": imageSplitList,
   "easy imageSplitGrid": imageSplitGrid,
   "easy imagesSplitImage": imagesSplitImage,
@@ -1530,6 +1596,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
   "easy imageToMask": "ImageToMask",
   "easy imageHSVMask": "ImageHSVMask",
   "easy imageConcat": "imageConcat",
+  "easy imageListToImageBatch": "Image List To Image Batch",
+  "easy imageBatchToImageList": "Image Batch To Image List",
   "easy imageSplitList": "imageSplitList",
   "easy imageSplitGrid": "imageSplitGrid",
   "easy imagesSplitImage": "imagesSplitImage",

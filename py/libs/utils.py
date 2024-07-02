@@ -100,6 +100,8 @@ def get_sd_version(model):
             model_config, (comfy.supported_models.SVD_img2vid)
     ):
         return 'svd'
+    elif isinstance(model_config, comfy.supported_models.SD3):
+        return 'sd3'
     else:
         return 'unknown'
 

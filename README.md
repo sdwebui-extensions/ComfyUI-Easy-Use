@@ -6,7 +6,7 @@
 
 # ComfyUI Easy Use
 
-[![Bilibili Badge](https://img.shields.io/badge/1.0版本-00A1D6?style=for-the-badge&logo=bilibili&logoColor=white&link=https://www.bilibili.com/video/BV1Wi4y1h76G)](https://www.bilibili.com/video/BV1Wi4y1h76G)
+[![Bilibili Badge](https://img.shields.io/badge/1.1版本-00A1D6?style=for-the-badge&logo=bilibili&logoColor=white&link=https://www.bilibili.com/video/BV1w6421F7Uv)](https://www.bilibili.com/video/BV1w6421F7Uv)
 [![Bilibili Badge](https://img.shields.io/badge/基本介绍-00A1D6?style=for-the-badge&logo=bilibili&logoColor=white&link=https://www.bilibili.com/video/BV1vQ4y1G7z7)](https://www.bilibili.com/video/BV1vQ4y1G7z7/)
 </div>
 
@@ -37,8 +37,32 @@
 - 支持Stable Diffusion 3 多账号API节点
 - 支持IC-Light的应用 [示例参考](https://github.com/yolain/ComfyUI-Yolain-Workflows?tab=readme-ov-file#2-5-ic-light) | [代码整合来源](https://github.com/huchenlei/ComfyUI-IC-Light) | [技术参考](https://github.com/lllyasviel/IC-Light)
 - 中文提示词自动识别，使用[opus-mt-zh-en模型](https://huggingface.co/Helsinki-NLP/opus-mt-zh-en)
+- 支持 sd3 模型 
+
+## 安装
+将存储库克隆到 **custom_nodes** 目录并安装依赖
+```shell
+#1. git下载
+git clone https://github.com/yolain/ComfyUI-Easy-Use
+#2. 安装依赖
+双击install.bat安装依赖
+```
 
 ## 更新日志
+
+**v1.2.0**
+
+- 当新菜单的位置在上或者下时增加上 crystools 的显示，推荐开两个就好（如果后续crystools有更新UI适配我可能会删除掉）
+- 增加 **easy sliderControl** - 滑块控制节点，当前可用于控制ipadapterMS的参数 (双击滑块可重置为默认值)
+- 增加 **layer_weights** 属性在 `easy ipadapterApplyADV` 节点
+
+**v1.1.9**
+
+- 增加 新的调度器 **gitsScheduler**
+- 增加 `easy imageBatchToImageList` 和 `easy imageListToImageBatch` (修复Impact版的一点小问题)
+- 递归模型子目录嵌套
+- 支持 sd3 模型 
+- 增加 `easy applyInpaint` - 局部重绘全模式节点 (相比与之前的kSamplerInpating节点逻辑会更合理些)
 
 **v1.1.8**
 
@@ -379,3 +403,11 @@
 [cg-image-picker](https://github.com/chrisgoringe/cg-image-picker) - 图片选择器
 
 [ComfyUI-BrushNet](https://github.com/nullquant/ComfyUI-BrushNet) - BrushNet 内补节点
+
+[ComfyUI_ExtraModels](https://github.com/city96/ComfyUI_ExtraModels) - DiT架构相关节点（Pixart、混元DiT等）
+
+##  🌟Stargazers
+
+My gratitude extends to the generous souls who bestow a star. Your support is much appreciated!
+
+[![Stargazers repo roster for @yolain/ComfyUI-Easy-Use](https://reporoster.com/stars/yolain/ComfyUI-Easy-Use)](https://github.com/yolain/ComfyUI-Easy-Use/stargazers)

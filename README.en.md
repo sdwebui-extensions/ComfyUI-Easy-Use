@@ -9,7 +9,7 @@
 
 **ComfyUI-Easy-Use** is a simplified node integration package, which is extended on the basis of [tinyterraNodes](https://github.com/TinyTerra/ComfyUI_tinyterraNodes), and has been integrated and optimized for many mainstream node packages to achieve the purpose of faster and more convenient use of ComfyUI. While ensuring the degree of freedom, it restores the ultimate smooth image production experience that belongs to Stable Diffusion.
 
-<img src="https://raw.githubusercontent.com/yolain/yolain-comfyui-workflow/main/Docs/workflow_node_compare.png">
+[![ComfyUI-Yolain-Workflows](https://github.com/yolain/ComfyUI-Easy-Use/assets/73304135/9a3f54bc-a677-4bf1-a196-8845dd57c942)](https://github.com/yolain/ComfyUI-Yolain-Workflows)
 
 ## Introduce
 
@@ -30,8 +30,31 @@
 - Background removal nodes for the RMBG-1.4 model supporting BriaAI, [BriaAI Guide](https://huggingface.co/briaai/RMBG-1.4)
 - Forcibly cleared the memory usage of the comfy UI model are supported
 - Stable Diffusion 3 multi-account API nodes are supported
+- Support Stable Diffusion 3 model
+
+## Installation
+Clone the repo into the **custom_nodes** directory and install the requirements:
+```shell
+#1. Clone the repo
+git clone https://github.com/yolain/ComfyUI-Easy-Use
+#2. Install the requirements
+Double-click install.bat to install the required dependencies
+```
 
 ## Changelog
+
+**v1.2.0**
+
+- Added **easy sliderControl** - Slider control node, which can currently be used to control the parameters of ipadapterMS (double-click the slider to reset to default)
+- Added **layer_weights** in `easy ipadapterApplyADV`
+
+**v1.1.9**
+
+- Added **gitsScheduler**
+- Added `easy imageBatchToImageList` and `easy imageListToImageBatch` 
+- Recursive subcategories nested for models
+- Support for Stable Diffusion 3 model
+- Added `easy applyInpaint` - All inpainting mode in this node
 
 **v1.1.8**
 
@@ -340,33 +363,6 @@ Disclaimer: Opened source was not easy. I have a lot of respect for the contribu
 | easy imageChooser              | [cg-image-picker](https://github.com/chrisgoringe/cg-image-picker) | Preview Chooser         | 
 | easy styleAlignedBatchAlign              | [style_aligned_comfy](https://github.com/chrisgoringe/cg-image-picker) | styleAlignedBatchAlign       | 
 
-## Workflow Examples
-
-### Text to image
-
-<img src="https://raw.githubusercontent.com/yolain/yolain-comfyui-workflow/main/Workflows/Simple/text_to_image.png">
-
-### Image to image + controlnet
-
-<img src="https://raw.githubusercontent.com/yolain/yolain-comfyui-workflow/main/Workflows/Simple/image_to_image_controlnet.png">
-
-### SDTurbo + HiresFix + SVD
-
-<img src="https://raw.githubusercontent.com/yolain/yolain-comfyui-workflow/main/Workflows/Simple/sdturbo_hiresfix_svd.png">
-
-### LayerDiffusion
-#### SD15
-<img src="https://raw.githubusercontent.com/yolain/yolain-comfyui-workflow/main/Workflows/Simple/layer_diffusion_sd15.png">
-
-#### SDXL
-<img src="https://raw.githubusercontent.com/yolain/yolain-comfyui-workflow/main/Workflows/Simple/layer_diffusion_example.png">
-
-### StableCascade
-#### Text to image
-<img src="https://raw.githubusercontent.com/yolain/yolain-comfyui-workflow/main/Workflows/StableCascade/text_to_image.png">
-
-#### Image to image
-<img src="https://raw.githubusercontent.com/yolain/yolain-comfyui-workflow/main/Workflows/StableCascade/image_to_image.png">
 
 ## Credits
 
@@ -391,3 +387,12 @@ Disclaimer: Opened source was not easy. I have a lot of respect for the contribu
 [ComfyUI-Custom-Scripts](https://github.com/pythongosssss/ComfyUI-Custom-Scripts) - pyssss🐍
 
 [cg-image-picker](https://github.com/chrisgoringe/cg-image-picker) - Image Preview Chooser
+
+[ComfyUI_ExtraModels](https://github.com/city96/ComfyUI_ExtraModels) - DiT custom nodes
+
+
+##  🌟Stargazers
+
+My gratitude extends to the generous souls who bestow a star. Your support is much appreciated!
+
+[![Stargazers repo roster for @yolain/ComfyUI-Easy-Use](https://reporoster.com/stars/yolain/ComfyUI-Easy-Use)](https://github.com/yolain/ComfyUI-Easy-Use/stargazers)

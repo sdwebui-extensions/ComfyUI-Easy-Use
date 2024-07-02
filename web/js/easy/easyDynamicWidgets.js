@@ -7,7 +7,7 @@ import { $t } from '../common/i18n.js';
 import { findWidgetByName, toggleWidget, updateNodeHeight} from "../common/utils.js";
 
 const seedNodes = ["easy seed", "easy latentNoisy", "easy wildcards", "easy preSampling", "easy preSamplingAdvanced", "easy preSamplingNoiseIn", "easy preSamplingSdTurbo", "easy preSamplingCascade", "easy preSamplingDynamicCFG", "easy preSamplingLayerDiffusion", "easy fullkSampler", "easy fullCascadeKSampler"]
-const loaderNodes = ["easy fullLoader", "easy a1111Loader", "easy comfyLoader"]
+const loaderNodes = ["easy fullLoader", "easy a1111Loader", "easy comfyLoader", "easy hunyuanDiTLoader"]
 
 
 function widgetLogic(node, widget) {
@@ -177,7 +177,10 @@ function widgetLogic(node, widget) {
 	}
 
 	if (widget.name === 'resolution') {
-		if (widget.value === "自定义 x 自定义") {
+		if(widget.value === "自定义 x 自定义"){
+			widget.value = 'width x height (custom)'
+		}
+		if (widget.value === "自定义 x 自定义" || widget.value === 'width x height (custom)') {
 			toggleWidget(node, findWidgetByName(node, 'empty_latent_width'), true)
 			toggleWidget(node, findWidgetByName(node, 'empty_latent_height'), true)
 		} else {
@@ -333,6 +336,7 @@ function widgetLogic(node, widget) {
 			toggleWidget(node, findWidgetByName(node, 'beta_d'))
 			toggleWidget(node, findWidgetByName(node, 'beta_min'))
 			toggleWidget(node, findWidgetByName(node, 'eps_s'))
+			toggleWidget(node, findWidgetByName(node, 'coeff'))
 			if(widget.value != 'exponentialADV'){
 				toggleWidget(node, findWidgetByName(node, 'rho'), true)
 			}else{
@@ -346,7 +350,9 @@ function widgetLogic(node, widget) {
 			toggleWidget(node, findWidgetByName(node, 'beta_d'),true)
 			toggleWidget(node, findWidgetByName(node, 'beta_min'),true)
 			toggleWidget(node, findWidgetByName(node, 'eps_s'),true)
-		}else{
+			toggleWidget(node, findWidgetByName(node, 'coeff'))
+		}
+		else{
 			toggleWidget(node, findWidgetByName(node, 'denoise'),true)
 			toggleWidget(node, findWidgetByName(node, 'sigma_max'))
 			toggleWidget(node, findWidgetByName(node, 'sigma_min'))
@@ -354,6 +360,40 @@ function widgetLogic(node, widget) {
 			toggleWidget(node, findWidgetByName(node, 'beta_min'))
 			toggleWidget(node, findWidgetByName(node, 'eps_s'))
 			toggleWidget(node, findWidgetByName(node, 'rho'))
+			if(widget.value == 'gits') 	toggleWidget(node, findWidgetByName(node, 'coeff'), true)
+			else toggleWidget(node, findWidgetByName(node, 'coeff'))
+		}
+		updateNodeHeight(node)
+	}
+
+	if(widget.name === 'inpaint_mode'){
+		switch (widget.value){
+			case 'normal':
+			case 'fooocus_inpaint':
+				toggleWidget(node, findWidgetByName(node, 'dtype'))
+				toggleWidget(node, findWidgetByName(node, 'fitting'))
+				toggleWidget(node, findWidgetByName(node, 'function'))
+				toggleWidget(node, findWidgetByName(node, 'scale'))
+				toggleWidget(node, findWidgetByName(node, 'start_at'))
+				toggleWidget(node, findWidgetByName(node, 'end_at'))
+				break
+			case 'brushnet_random':
+			case 'brushnet_segmentation':
+				toggleWidget(node, findWidgetByName(node, 'dtype'), true)
+				toggleWidget(node, findWidgetByName(node, 'fitting'))
+				toggleWidget(node, findWidgetByName(node, 'function'))
+				toggleWidget(node, findWidgetByName(node, 'scale'), true)
+				toggleWidget(node, findWidgetByName(node, 'start_at'), true)
+				toggleWidget(node, findWidgetByName(node, 'end_at'), true)
+				break
+			case 'powerpaint':
+				toggleWidget(node, findWidgetByName(node, 'dtype'), true)
+				toggleWidget(node, findWidgetByName(node, 'fitting'),true)
+				toggleWidget(node, findWidgetByName(node, 'function'),true)
+				toggleWidget(node, findWidgetByName(node, 'scale'), true)
+				toggleWidget(node, findWidgetByName(node, 'start_at'), true)
+				toggleWidget(node, findWidgetByName(node, 'end_at'), true)
+				break
 		}
 		updateNodeHeight(node)
 	}
@@ -607,6 +647,7 @@ app.registerExtension({
 			case "easy cascadeLoader":
 			case "easy svdLoader":
 			case "easy dynamiCrafterLoader":
+			case "easy hunyuanDiTLoader":
 			case "easy loraStack":
 			case "easy controlnetStack":
 			case "easy latentNoisy":
@@ -646,6 +687,7 @@ app.registerExtension({
 			case 'easy ipadapterApply':
 			case 'easy ipadapterApplyADV':
 			case 'easy ipadapterApplyEncoder':
+			case 'easy applyInpaint':
 				getSetters(node)
 				break
 			case "easy wildcards":
@@ -1150,7 +1192,7 @@ const getSetWidgets = ['rescale_after_model', 'rescale',
 						'num_loras', 'num_controlnet', 'mode', 'toggle', 'resolution', 'target_parameter',
 	'input_count', 'replace_count', 'downscale_mode', 'range_mode','text_combine_mode', 'input_mode',
 	'lora_count','ckpt_count', 'conditioning_mode', 'preset', 'use_tiled', 'use_batch', 'num_embeds',
-	"easing_mode", "guider", "scheduler"
+	"easing_mode", "guider", "scheduler", "inpaint_mode",
 ]
 
 function getSetters(node) {
