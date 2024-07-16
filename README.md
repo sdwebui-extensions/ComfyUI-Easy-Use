@@ -50,8 +50,15 @@ git clone https://github.com/yolain/ComfyUI-Easy-Use
 
 ## 更新日志
 
+**v1.2.1**
+
+- 去除 `easy positive` `easy negative` 等prompt节点的自动将中文翻译功能，自动翻译仅在 `easy a1111Loader` 等不支持中文TE的加载器中生效
+- 增加 `easy kolorsLoader` - 可灵加载器，参考了 [MinusZoneAI](https://github.com/MinusZoneAI/ComfyUI-Kolors-MZ) 和 [kijai](https://github.com/kijai/ComfyUI-KwaiKolorsWrapper) 的代码。
+
 **v1.2.0**
 
+- 增加 `easy pulIDApply` 和 `easy pulIDApplyADV`
+- 增加 `easy huanyuanDiTLoader` 和 `easy pixArtLoader`
 - 当新菜单的位置在上或者下时增加上 crystools 的显示，推荐开两个就好（如果后续crystools有更新UI适配我可能会删除掉）
 - 增加 **easy sliderControl** - 滑块控制节点，当前可用于控制ipadapterMS的参数 (双击滑块可重置为默认值)
 - 增加 **layer_weights** 属性在 `easy ipadapterApplyADV` 节点
@@ -375,6 +382,7 @@ git clone https://github.com/yolain/ComfyUI-Easy-Use
 | easy imageChooser              | [cg-image-picker](https://github.com/chrisgoringe/cg-image-picker) | Preview Chooser         | 
 | easy styleAlignedBatchAlign    | [style_aligned_comfy](https://github.com/chrisgoringe/cg-image-picker) | styleAlignedBatchAlign  | 
 | easy icLightApply              | [ComfyUI-IC-Light](https://github.com/huchenlei/ComfyUI-IC-Light) | ICLightApply等           |
+| easy kolorsLoader              | [ComfyUI-Kolors-MZ](https://github.com/MinusZoneAI/ComfyUI-Kolors-MZ) | kolorsLoader            |
 
 ## Credits
 
@@ -397,6 +405,8 @@ git clone https://github.com/yolain/ComfyUI-Easy-Use
 [ComfyUI_IPAdapter_plus](https://github.com/cubiq/ComfyUI_IPAdapter_plus) - 风格迁移
 
 [ComfyUI_InstantID](https://github.com/cubiq/ComfyUI_InstantID) - 人脸迁移
+
+[ComfyUI_PuLID](https://github.com/cubiq/PuLID_ComfyUI) - 人脸迁移
 
 [ComfyUI-Custom-Scripts](https://github.com/pythongosssss/ComfyUI-Custom-Scripts) - pyssss 小蛇🐍脚本
 

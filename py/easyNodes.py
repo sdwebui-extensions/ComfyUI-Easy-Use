@@ -61,8 +61,6 @@ class positivePrompt:
 
     @staticmethod
     def main(positive):
-        if has_chinese(positive):
-            return zh_to_en([positive])
         return positive,
 
 # 通配符提示词
@@ -93,10 +91,7 @@ class wildcardsPrompt:
     CATEGORY = "EasyUse/Prompt"
 
     def translate(self, text):
-        if has_chinese(text):
-            return zh_to_en([text])[0]
-        else:
-            return text
+        return text
 
     def main(self, *args, **kwargs):
         prompt = kwargs["prompt"] if "prompt" in kwargs else None
@@ -142,10 +137,7 @@ class negativePrompt:
 
     @staticmethod
     def main(negative):
-        if has_chinese(negative):
-            return zh_to_en([negative])
-        else:
-            return negative,
+        return negative,
 
 # 风格提示词选择器
 class stylesPromptSelector:
@@ -257,8 +249,6 @@ class prompt:
     CATEGORY = "EasyUse/Prompt"
 
     def doit(self, prompt, main, lighting):
-        if has_chinese(prompt):
-            prompt = zh_to_en([prompt])[0]
         if lighting != 'none' and main != 'none':
             prompt = main + ',' + lighting + ',' + prompt
         elif lighting != 'none' and main == 'none':
@@ -302,8 +292,6 @@ class promptList:
 
             # Only process string input ports.
             if isinstance(v, str) and v != '':
-                if has_chinese(v):
-                    v = zh_to_en([v])[0]
                 prompts.append(v)
 
         return (prompts, prompts)
@@ -331,7 +319,7 @@ class promptLine:
 
     def generate_strings(self, prompt, start_index, max_rows, workflow_prompt=None, my_unique_id=None):
         lines = prompt.split('\n')
-        lines = [zh_to_en([v])[0] if has_chinese(v) else v for v in lines if v]
+        # lines = [zh_to_en([v])[0] if has_chinese(v) else v for v in lines if v]
 
         start_index = max(0, min(start_index, len(lines) - 1))
 
@@ -1739,8 +1727,6 @@ class dynamiCrafterLoader(DynamiCrafter):
         model_path = get_local_filepath(DYNAMICRAFTER_MODELS[model_name]['model_url'], DYNAMICRAFTER_DIR, cache_dir='/stable-diffusion-cache/models/dynamiccraft')
         model_patcher, image_proj_model = self.load_dynamicrafter(model_path)
 
-        # rescale cfg
-
         # apply
         model, empty_latent, image_latent = self.process_image_conditioning(model_patcher, clip_vision, vae, image_proj_model, init_image, use_interpolate, fps, frames, scale_latents)
 
@@ -1785,9 +1771,119 @@ class dynamiCrafterLoader(DynamiCrafter):
 
         return (pipe, model, vae)
 
+# kolors Loader
+from .kolors.text_encode import chatglm3_adv_text_encode
+class kolorsLoader:
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required":{
+                "unet_name": (folder_paths.get_filename_list("unet"),),
+                "vae_name": (folder_paths.get_filename_list("vae"),),
+                "chatglm3_name": (folder_paths.get_filename_list("llm"),),
+                "lora_name": (["None"] + folder_paths.get_filename_list("loras"),),
+                "lora_model_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
+                "lora_clip_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
+                "resolution": (resolution_strings, {"default": "1024 x 576"}),
+                "empty_latent_width": ("INT", {"default": 1024, "min": 64, "max": MAX_RESOLUTION, "step": 8}),
+                "empty_latent_height": ("INT", {"default": 1024, "min": 64, "max": MAX_RESOLUTION, "step": 8}),
+
+                "positive": ("STRING", {"default": "", "placeholder": "Positive", "multiline": True}),
+                "negative": ("STRING", {"default": "", "placeholder": "Negative", "multiline": True}),
+
+                "batch_size": ("INT", {"default": 1, "min": 1, "max": 64}),
+            },
+            "optional": {
+                "model_override": ("MODEL",),
+                "optional_lora_stack": ("LORA_STACK",),
+            },
+            "hidden": {"prompt": "PROMPT", "my_unique_id": "UNIQUE_ID"}
+        }
+
+    RETURN_TYPES = ("PIPE_LINE", "MODEL", "VAE")
+    RETURN_NAMES = ("pipe", "model", "vae")
+
+    FUNCTION = "adv_pipeloader"
+    CATEGORY = "EasyUse/Loaders"
+
+    def adv_pipeloader(self, unet_name, vae_name, chatglm3_name, lora_name, lora_model_strength, lora_clip_strength, resolution, empty_latent_width, empty_latent_height, positive, negative, batch_size, model_override=None, optional_lora_stack=None, prompt=None, my_unique_id=None):
+        # load unet
+        if model_override:
+           model = model_override
+        else:
+           model = easyCache.load_kolors_unet(unet_name)
+        # load vae
+        vae = easyCache.load_vae(vae_name)
+        # load chatglm3
+        chatglm3_model = easyCache.load_chatglm3(chatglm3_name)
+        # load lora
+        lora_stack = []
+        if optional_lora_stack is not None:
+            for lora in optional_lora_stack:
+                lora = {"lora_name": lora[0], "model": model, "clip": None, "model_strength": lora[1],
+                        "clip_strength": lora[2]}
+                model, _ = easyCache.load_lora(lora)
+                lora['model'] = model
+                lora['clip'] = None
+                lora_stack.append(lora)
+
+        if lora_name != "None":
+            lora = {"lora_name": lora_name, "model": model, "clip": None, "model_strength": lora_model_strength,
+                    "clip_strength": lora_clip_strength}
+            model, _ = easyCache.load_lora(lora)
+            lora_stack.append(lora)
+
+
+        # text encode
+        log_node_warn("正在进行正向提示词编码...")
+        positive_embeddings_final = chatglm3_adv_text_encode(chatglm3_model, positive)
+        log_node_warn("正在进行负面提示词编码...")
+        negative_embeddings_final = chatglm3_adv_text_encode(chatglm3_model, negative)
+
+        # empty latent
+        samples = sampler.emptyLatent(resolution, empty_latent_width, empty_latent_height, batch_size)
+
+        log_node_warn("处理完毕...")
+        pipe = {
+            "model": model,
+            "positive": positive_embeddings_final,
+            "negative": negative_embeddings_final,
+            "vae": vae,
+            "clip": None,
+
+            "samples": samples,
+            "images": None,
+
+            "loader_settings": {
+                "unet_name": unet_name,
+                "vae_name": vae_name,
+                "chatglm3_name": chatglm3_name,
+
+                "lora_name": lora_name,
+                "lora_model_strength": lora_model_strength,
+                "lora_clip_strength": lora_clip_strength,
+
+                "positive": positive,
+                "negative": negative,
+                "resolution": resolution,
+                "empty_latent_width": empty_latent_width,
+                "empty_latent_height": empty_latent_height,
+                "batch_size": batch_size,
+            }
+        }
+
+        return {"ui": {},
+                "result": (pipe, model, vae, chatglm3_model, positive_embeddings_final, negative_embeddings_final, samples)}
+
+
+        return (chatglm3_model, None, None)
+
+
 # Dit Loader
 from .dit.utils import string_to_dtype
 from .dit.hunyuanDiT.config import hydit_conf, dtypes, devices
+from .dit.pixArt.config import pixart_conf, pixart_res
 class hunyuanDiTLoader:
     @classmethod
     def INPUT_TYPES(cls):
@@ -1796,7 +1892,7 @@ class hunyuanDiTLoader:
         return {
             "required": {
                 "ckpt_name": (folder_paths.get_filename_list("checkpoints"),),
-                "model":(list(hydit_conf.keys()),{"default":"G/2"}),
+                "model_name":(list(hydit_conf.keys()),{"default":"G/2"}),
                 "vae_name": (folder_paths.get_filename_list("vae"),),
                 "clip_name": (folder_paths.get_filename_list("clip"),),
                 "mt5_name": (folder_paths.get_filename_list("t5"),),
@@ -1810,7 +1906,8 @@ class hunyuanDiTLoader:
                 "negative": ("STRING", {"default": "", "placeholder": "Negative", "multiline": True}),
 
                 "batch_size": ("INT", {"default": 1, "min": 1, "max": 64}),
-            }
+            },
+            "hidden": {"prompt": "PROMPT", "my_unique_id": "UNIQUE_ID"}
         }
 
     RETURN_TYPES = ("PIPE_LINE", "MODEL", "VAE")
@@ -1869,17 +1966,19 @@ class hunyuanDiTLoader:
             }
         ]],)
 
-    def hydit_pipeloader(self, ckpt_name, model, vae_name, clip_name, mt5_name, device, dtype, resolution, empty_latent_width, empty_latent_height, positive, negative, batch_size, prompt=None, my_unique_id=None):
+    def hydit_pipeloader(self, ckpt_name, model_name, vae_name, clip_name, mt5_name, device, dtype, resolution, empty_latent_width, empty_latent_height, positive, negative, batch_size, prompt=None, my_unique_id=None):
         dtype = string_to_dtype(dtype, "text_encoder")
         if device == "cpu":
             assert dtype in [None, torch.float32,
                              torch.bfloat16], f"Can't use dtype '{dtype}' with CPU! Set dtype to 'default' or 'bf16'."
 
+        # Clean models from loaded_objects
+        easyCache.update_loaded_objects(prompt)
+
         # Load models
         log_node_warn("正在加载模型...")
         # load checkpoint
-
-        model = easyCache.load_dit_ckpt(ckpt_name=ckpt_name, model_name=model, hydit_conf=hydit_conf, model_type='HyDiT')
+        model = easyCache.load_dit_ckpt(ckpt_name=ckpt_name, model_name=model_name, hydit_conf=hydit_conf, model_type='HyDiT')
         # load vae
         vae = easyCache.load_vae(vae_name)
         # load clip
@@ -1923,6 +2022,127 @@ class hunyuanDiTLoader:
         return {"ui": {},
                 "result": (pipe, model, vae, clip, positive_embeddings_final, negative_embeddings_final, samples)}
 
+class pixArtLoader:
+    @classmethod
+    def INPUT_TYPES(cls):
+        for k in range(1, torch.cuda.device_count()):
+            devices.append(f"cuda:{k}")
+        return {
+            "required": {
+                "ckpt_name": (folder_paths.get_filename_list("checkpoints"),),
+                "model_name":(list(pixart_conf.keys()),),
+                "vae_name": (folder_paths.get_filename_list("vae"),),
+                "t5_type": (['sd3'],),
+                "clip_name": (folder_paths.get_filename_list("clip"),),
+                "padding": ("INT", {"default": 1, "min": 1, "max": 300}),
+                "t5_name": (folder_paths.get_filename_list("t5"),),
+                "device": (devices, {"default": "cpu"}),
+                "dtype": (dtypes,),
+
+                "lora_name": (["None"] + folder_paths.get_filename_list("loras"),),
+                "lora_model_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
+
+                "ratio": (["custom"] + list(pixart_res["PixArtMS_XL_2"].keys()), {"default":"1.00"}),
+                "empty_latent_width": ("INT", {"default": 1024, "min": 64, "max": MAX_RESOLUTION, "step": 8}),
+                "empty_latent_height": ("INT", {"default": 1024, "min": 64, "max": MAX_RESOLUTION, "step": 8}),
+
+                "positive": ("STRING", {"default": "", "placeholder": "Positive", "multiline": True}),
+                "negative": ("STRING", {"default": "", "placeholder": "Negative", "multiline": True}),
+
+                "batch_size": ("INT", {"default": 1, "min": 1, "max": 64}),
+            },
+            "optional":{
+              "optional_lora_stack": ("LORA_STACK",),
+            },
+            "hidden": {"prompt": "PROMPT", "my_unique_id": "UNIQUE_ID"}
+        }
+
+    RETURN_TYPES = ("PIPE_LINE", "MODEL", "VAE")
+    RETURN_NAMES = ("pipe", "model", "vae")
+    FUNCTION = "pixart_pipeloader"
+    CATEGORY = "EasyUse/Loaders"
+
+    def pixart_pipeloader(self, ckpt_name, model_name, vae_name, t5_type, clip_name, padding, t5_name, device, dtype, lora_name, lora_model_strength, ratio, empty_latent_width, empty_latent_height, positive, negative, batch_size, optional_lora_stack=None, prompt=None, my_unique_id=None):
+        # Clean models from loaded_objects
+        easyCache.update_loaded_objects(prompt)
+
+        # load checkpoint
+        model = easyCache.load_dit_ckpt(ckpt_name=ckpt_name, model_name=model_name, pixart_conf=pixart_conf,
+                                        model_type='PixArt')
+        # load vae
+        vae = easyCache.load_vae(vae_name)
+
+        # load t5
+        if t5_type == 'sd3':
+            clip = easyCache.load_clip(clip_name=clip_name,type='sd3')
+            clip = easyCache.load_t5_from_sd3_clip(sd3_clip=clip, padding=padding)
+            lora_stack = None
+            if optional_lora_stack is not None:
+                for lora in optional_lora_stack:
+                    lora = {"lora_name": lora[0], "model": model, "clip": clip, "model_strength": lora[1],
+                            "clip_strength": lora[2]}
+                    model, _ = easyCache.load_lora(lora, type='PixArt')
+                    lora['model'] = model
+                    lora['clip'] = clip
+                    lora_stack.append(lora)
+
+            if lora_name != "None":
+                lora = {"lora_name": lora_name, "model": model, "clip": clip, "model_strength": lora_model_strength,
+                        "clip_strength": 1}
+                model, _ = easyCache.load_lora(lora, type='PixArt')
+                lora_stack.append(lora)
+
+            positive_embeddings_final, = CLIPTextEncode().encode(clip, positive)
+            negative_embeddings_final, = CLIPTextEncode().encode(clip, negative)
+        else:
+            # todo t5v11
+            positive_embeddings_final, negative_embeddings_final = None, None
+            clip = None
+            pass
+
+        # Create Empty Latent
+        if ratio != 'custom':
+            if model_name in ['ControlPixArtMSHalf','PixArtMS_Sigma_XL_2_900M']:
+                res_name = 'PixArtMS_XL_2'
+            elif model_name in ['ControlPixArtHalf']:
+                res_name = 'PixArt_XL_2'
+            else:
+                res_name = model_name
+            width, height = pixart_res[res_name][ratio]
+            empty_latent_width = width
+            empty_latent_height = height
+
+        latent = torch.zeros([batch_size, 4, empty_latent_height // 8, empty_latent_width // 8], device=sampler.device)
+        samples = {"samples": latent}
+
+        log_node_warn("加载完毕...")
+        pipe = {
+            "model": model,
+            "positive": positive_embeddings_final,
+            "negative": negative_embeddings_final,
+            "vae": vae,
+            "clip": clip,
+
+            "samples": samples,
+            "images": None,
+
+            "loader_settings": {
+                "ckpt_name": ckpt_name,
+                "clip_name": clip_name,
+                "vae_name": vae_name,
+                "t5_name": t5_name,
+
+                "positive": positive,
+                "negative": negative,
+                "ratio": ratio,
+                "empty_latent_width": empty_latent_width,
+                "empty_latent_height": empty_latent_height,
+                "batch_size": batch_size,
+            }
+        }
+
+        return {"ui": {},
+                "result": (pipe, model, vae, clip, positive_embeddings_final, negative_embeddings_final, samples)}
 
 # lora
 class loraStack:
@@ -2623,7 +2843,8 @@ class ipadapter:
             'FACEID',
             'FACEID PLUS - SD1.5 only',
             'FACEID PLUS V2',
-            'FACEID PORTRAIT (style transfer)'
+            'FACEID PORTRAIT (style transfer)',
+            'FACEID PORTRAIT UNNORM - SDXL only (strong)'
         ]
         self.weight_types = ["linear", "ease in", "ease out", 'ease in-out', 'reverse in-out', 'weak input', 'weak output', 'weak middle', 'strong middle', 'style transfer', 'composition', 'strong style transfer', 'style and composition', 'style transfer precise']
         self.presets = self.normal_presets + self.faceid_presets
@@ -2691,7 +2912,7 @@ class ipadapter:
                 pattern = 'plus.composition.sdxl\.(safetensors|bin)$'
             else:
                 pattern = 'plus.composition.sd15\.(safetensors|bin)$'
-        elif preset.startswith("faceid portrait"):
+        elif preset.startswith("faceid portrait ("):
             if is_sdxl:
                 pattern = 'portrait.sdxl\.(safetensors|bin)$'
             else:
@@ -2699,6 +2920,12 @@ class ipadapter:
                 # if v11 is not found, try with the old version
                 if not [e for e in ipadapter_list if re.search(pattern, e, re.IGNORECASE)]:
                     pattern = 'portrait.sd15\.(safetensors|bin)$'
+            is_insightface = True
+        elif preset.startswith("faceid portrait unnorm"):
+            if is_sdxl:
+                pattern = r'portrait.sdxl.unnorm\.(safetensors|bin)$'
+            else:
+                raise Exception("portrait unnorm model is not supported for SD1.5")
             is_insightface = True
         elif preset == "faceid":
             if is_sdxl:
@@ -2746,6 +2973,7 @@ class ipadapter:
             lora_pattern = 'faceid.plusv2.sdxl.lora\.safetensors$'
         elif re.search(r'faceid.plusv2.sd15\.(safetensors|bin)$', basename, re.IGNORECASE):
             lora_pattern = 'faceid.plusv2.sd15.lora\.safetensors$'
+
         return lora_pattern
 
     def get_lora_file(self, preset, pattern, model_type, model, model_strength, clip_strength, clip=None):
@@ -2778,6 +3006,9 @@ class ipadapter:
 
         if 'plusv2' in file.lower():
             model["faceidplusv2"] = True
+
+        if 'unnorm' in file.lower():
+            model["portraitunnorm"] = True
 
         return model
 
@@ -3456,6 +3687,108 @@ class instantIDApplyAdvanced(instantID):
 
         return self.run(pipe, image, instantid_file, insightface, control_net_name, cn_strength, cn_soft_weights, weight, start_at, end_at, noise, image_kps, mask, control_net, positive, negative, prompt, extra_pnginfo, my_unique_id)
 
+class applyPulID:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "pulid_file": (folder_paths.get_filename_list("pulid"),),
+                "insightface": (["CPU", "CUDA", "ROCM"],),
+                "image": ("IMAGE",),
+                "method": (["fidelity", "style", "neutral"],),
+                "weight": ("FLOAT", {"default": 1.0, "min": -1.0, "max": 5.0, "step": 0.05}),
+                "start_at": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
+                "end_at": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
+            },
+            "optional": {
+                "attn_mask": ("MASK",),
+            },
+        }
+
+    RETURN_TYPES = ("MODEL",)
+    RETURN_NAMES = ("model",)
+
+    FUNCTION = "run"
+    CATEGORY = "EasyUse/Adapter"
+
+    def error(self):
+        raise Exception(f"[ERROR] To use pulIDApply, you need to install 'ComfyUI_PulID'")
+
+    def run(self, model, image, pulid_file, insightface, weight, start_at, end_at, method=None, noise=0.0, fidelity=None, projection=None, attn_mask=None, prompt=None, extra_pnginfo=None, my_unique_id=None):
+        pulid_model, insightface_model, eva_clip = None, None, None
+        # Load PulID
+        cache_key = 'pulID'
+        if cache_key in backend_cache.cache:
+            log_node_info("easy pulIDApply","Using InstantIDModel Cached")
+            _, pulid_model = backend_cache.cache[cache_key][1]
+        if "PulidModelLoader" in ALL_NODE_CLASS_MAPPINGS:
+            load_pulid_cls = ALL_NODE_CLASS_MAPPINGS["PulidModelLoader"]
+            pulid_model, = load_pulid_cls().load_model(pulid_file)
+            backend_cache.update_cache(cache_key, 'pulid', (False, pulid_model))
+        else:
+            self.error()
+        # Load Insightface
+        icache_key = 'insightface-' + insightface
+        if icache_key in backend_cache.cache:
+            log_node_info("easy pulIDApply", f"Using InsightFaceModel {insightface} Cached")
+            _, insightface_model = backend_cache.cache[icache_key][1]
+        elif "PulidInsightFaceLoader" in ALL_NODE_CLASS_MAPPINGS:
+            load_insightface_cls = ALL_NODE_CLASS_MAPPINGS["PulidInsightFaceLoader"]
+            insightface_model, = load_insightface_cls().load_insightface(insightface)
+            backend_cache.update_cache(icache_key, 'insightface', (False, insightface_model))
+        else:
+            self.error()
+        # Load Eva clip
+        ecache_key = 'eva_clip'
+        if ecache_key in backend_cache.cache:
+            log_node_info("easy pulIDApply", f"Using EVAClipModel Cached")
+            _, eva_clip = backend_cache.cache[ecache_key][1]
+        elif "PulidEvaClipLoader" in ALL_NODE_CLASS_MAPPINGS:
+            load_evaclip_cls = ALL_NODE_CLASS_MAPPINGS["PulidEvaClipLoader"]
+            eva_clip, = load_evaclip_cls().load_eva_clip()
+            backend_cache.update_cache(ecache_key, 'eva_clip', (False, eva_clip))
+        else:
+            self.error()
+
+        # Apply PulID
+        if method is not None:
+            if "ApplyPulid" in ALL_NODE_CLASS_MAPPINGS:
+                cls = ALL_NODE_CLASS_MAPPINGS['ApplyPulid']
+                model, = cls().apply_pulid(model, pulid=pulid_model, eva_clip=eva_clip, face_analysis=insightface_model, image=image, weight=weight, method=method, start_at=start_at, end_at=end_at, attn_mask=attn_mask)
+            else:
+                self.error()
+        else:
+            if "ApplyPulidAdvanced" in ALL_NODE_CLASS_MAPPINGS:
+                cls = ALL_NODE_CLASS_MAPPINGS['ApplyPulidAdvanced']
+                model, = cls().apply_pulid(model, pulid=pulid_model, eva_clip=eva_clip, face_analysis=insightface_model, image=image, weight=weight, projection=projection, fidelity=fidelity, noise=noise, start_at=start_at, end_at=end_at, attn_mask=attn_mask)
+            else:
+                self.error()
+
+        return (model,)
+
+class applyPulIDADV(applyPulID):
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "pulid_file": (folder_paths.get_filename_list("pulid"),),
+                "insightface": (["CPU", "CUDA", "ROCM"],),
+                "image": ("IMAGE",),
+                "weight": ("FLOAT", {"default": 1.0, "min": -1.0, "max": 5.0, "step": 0.05}),
+                "projection": (["ortho_v2", "ortho", "none"], {"default":"ortho_v2"}),
+                "fidelity": ("INT", {"default": 8, "min": 0, "max": 32, "step": 1}),
+                "noise": ("FLOAT", {"default": 0.0, "min": -1.0, "max": 1.0, "step": 0.1}),
+                "start_at": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
+                "end_at": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
+            },
+            "optional": {
+                "attn_mask": ("MASK",),
+            },
+        }
+
 # ---------------------------------------------------------------适配器 结束----------------------------------------------------------------------#
 
 #---------------------------------------------------------------预采样 开始----------------------------------------------------------------------#
@@ -3778,6 +4111,7 @@ class samplerSettingsNoiseIn:
 
 # 预采样设置（自定义）
 import comfy_extras.nodes_custom_sampler as custom_samplers
+from .kolors.model_patch import patched_set_conds
 from tqdm import trange
 class samplerCustomSettings:
 
@@ -3927,7 +4261,8 @@ class samplerCustomSettings:
                 case 'alignYourSteps':
                     model_type = get_sd_version(model)
                     if model_type == 'unknown':
-                        raise Exception("This Model not supported")
+                        model_type = 'sdxl'
+                        # raise Exception("This Model not supported")
                     sigmas, = alignYourStepsScheduler().get_sigmas(model_type.upper(), steps, denoise)
                 case 'gits':
                     sigmas, = gitsScheduler().get_sigmas(coeff, steps, denoise)
@@ -3986,10 +4321,22 @@ class samplerCustomSettings:
 
         # guider
         if guider == 'CFG':
+            # --------------------------------
+            # kolors  patch set conditioning
+            model, positive, negative, _ = patched_set_conds(model, positive, negative, None)
+            # --------------------------------
             _guider, = self.get_custom_cls('CFGGuider').get_guider(model, positive, negative, cfg)
         elif guider in ['DualCFG', 'IP2P+DualCFG']:
-            _guider, =  self.get_custom_cls('DualCFGGuider').get_guider(model, positive, negative, pipe['negative'], cfg, cfg_negative)
+            # --------------------------------
+            # kolors patch set conditioning
+            model, positive, negative, middle = patched_set_conds(model, positive, pipe['negative'], negative)
+            # --------------------------------
+            _guider, =  self.get_custom_cls('DualCFGGuider').get_guider(model, positive, middle, negative, cfg, cfg_negative)
         else:
+            # --------------------------------
+            # kolors patch set conditioning
+            model, positive, negative, _ = patched_set_conds(model, positive, negative, None)
+            # --------------------------------
             _guider, = self.get_custom_cls('BasicGuider').get_guider(model, positive)
 
         # sampler
@@ -4620,6 +4967,8 @@ class samplerFull:
         if add_noise == "disable":
             disable_noise = True
 
+
+        # When model is colors
         def downscale_model_unet(samp_model):
             # 获取Unet参数
             if "PatchModelAddDownscale" in ALL_NODE_CLASS_MAPPINGS:
@@ -4698,7 +5047,8 @@ class samplerFull:
             elif scheduler == 'align_your_steps':
                 model_type = get_sd_version(samp_model)
                 if model_type == 'unknown':
-                    raise Exception("This Model not supported")
+                    model_type = 'sdxl'
+                    # raise Exception("This Model not supported")
                 sigmas, = alignYourStepsScheduler().get_sigmas(model_type.upper(), steps, denoise)
                 _sampler = comfy.samplers.sampler_object(sampler_name)
                 samp_samples = sampler.custom_ksampler(samp_model, samp_seed, steps, cfg, _sampler, sigmas, samp_positive, samp_negative, samp_samples, disable_noise=disable_noise, preview_latent=preview_latent)
@@ -5803,7 +6153,7 @@ class preDetailerFix:
              "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
              "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}),
              "sampler_name": (comfy.samplers.KSampler.SAMPLERS,),
-             "scheduler": (comfy.samplers.KSampler.SCHEDULERS,),
+             "scheduler": (comfy.samplers.KSampler.SCHEDULERS + ['align_your_steps'],),
              "denoise": ("FLOAT", {"default": 0.5, "min": 0.0001, "max": 1.0, "step": 0.01}),
              "feather": ("INT", {"default": 5, "min": 0, "max": 100, "step": 1}),
              "noise_mask": ("BOOLEAN", {"default": True, "label_on": "enabled", "label_off": "disabled"}),
@@ -5857,6 +6207,15 @@ class preDetailerFix:
             raise Exception(f"[ERROR] sam_pipe or pipe['sam_pipe'] is missing")
 
         loader_settings = pipe["loader_settings"] if "loader_settings" in pipe else {}
+
+        if(scheduler == 'align_your_steps'):
+            model_version = get_sd_version(model)
+            if model_version == 'sdxl':
+                scheduler = 'AYS SDXL'
+            elif model_version == 'svd':
+                scheduler = 'AYS SVD'
+            else:
+                scheduler = 'AYS SD1'
 
         new_pipe = {
             "images": images,
@@ -7077,7 +7436,9 @@ NODE_CLASS_MAPPINGS = {
     "easy zero123Loader": zero123Loader,
     "easy dynamiCrafterLoader": dynamiCrafterLoader,
     "easy cascadeLoader": cascadeLoader,
+    "easy kolorsLoader": kolorsLoader,
     "easy hunyuanDiTLoader": hunyuanDiTLoader,
+    "easy pixArtLoader": pixArtLoader,
     "easy loraStack": loraStack,
     "easy controlnetStack": controlnetStack,
     "easy controlnetLoader": controlnetSimple,
@@ -7093,6 +7454,8 @@ NODE_CLASS_MAPPINGS = {
     "easy ipadapterStyleComposition": ipadapterStyleComposition,
     "easy instantIDApply": instantIDApply,
     "easy instantIDApplyADV": instantIDApplyAdvanced,
+    "easy pulIDApply": applyPulID,
+    "easy pulIDApplyADV": applyPulIDADV,
     "easy styleAlignedBatchAlign": styleAlignedBatchAlign,
     "easy icLightApply": icLightApply,
     # Inpaint 内补
@@ -7191,7 +7554,9 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "easy zero123Loader": "EasyLoader (Zero123)",
     "easy dynamiCrafterLoader": "EasyLoader (DynamiCrafter)",
     "easy cascadeLoader": "EasyCascadeLoader",
+    "easy kolorsLoader": "EasyLoader (Kolors)",
     "easy hunyuanDiTLoader": "EasyLoader (HunYuanDiT)",
+    "easy pixArtLoader": "EasyLoader (PixArt)",
     "easy loraStack": "EasyLoraStack",
     "easy controlnetStack": "EasyControlnetStack",
     "easy controlnetLoader": "EasyControlnet",
@@ -7207,6 +7572,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "easy ipadapterApplyFromParams": "Easy Apply IPAdapter (From Params)",
     "easy instantIDApply": "Easy Apply InstantID",
     "easy instantIDApplyADV": "Easy Apply InstantID (Advanced)",
+    "easy pulIDApply": "Easy Apply PuLID",
+    "easy pulIDApplyADV": "Easy Apply PuLID (Advanced)",
     "easy styleAlignedBatchAlign": "Easy Apply StyleAlign",
     "easy icLightApply": "Easy Apply ICLight",
     # Inpaint 内补

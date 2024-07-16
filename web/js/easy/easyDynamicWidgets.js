@@ -7,7 +7,7 @@ import { $t } from '../common/i18n.js';
 import { findWidgetByName, toggleWidget, updateNodeHeight} from "../common/utils.js";
 
 const seedNodes = ["easy seed", "easy latentNoisy", "easy wildcards", "easy preSampling", "easy preSamplingAdvanced", "easy preSamplingNoiseIn", "easy preSamplingSdTurbo", "easy preSamplingCascade", "easy preSamplingDynamicCFG", "easy preSamplingLayerDiffusion", "easy fullkSampler", "easy fullCascadeKSampler"]
-const loaderNodes = ["easy fullLoader", "easy a1111Loader", "easy comfyLoader", "easy hunyuanDiTLoader"]
+const loaderNodes = ["easy fullLoader", "easy a1111Loader", "easy comfyLoader", "easy hunyuanDiTLoader", "easy pixArtLoader"]
 
 
 function widgetLogic(node, widget) {
@@ -77,14 +77,30 @@ function widgetLogic(node, widget) {
 		}
 	}
 	if (widget.name === 'add_noise') {
+		let control_before_widget = findWidgetByName(node, 'control_before_generate')
+		let control_after_widget = findWidgetByName(node, 'control_after_generate')
 		if (widget.value === "disable") {
 			toggleWidget(node, findWidgetByName(node, 'seed'))
-			toggleWidget(node, findWidgetByName(node, 'control_before_generate'))
-			toggleWidget(node, findWidgetByName(node, 'control_after_generate'))
+			if(control_before_widget){
+				control_before_widget.last_value = control_before_widget.value
+				control_before_widget.value = 'fixed'
+				toggleWidget(node, control_before_widget)
+			}
+			if(control_after_widget){
+				control_after_widget.last_value = control_after_widget.value
+				control_after_widget.value = 'fixed'
+				toggleWidget(node, control_after_widget)
+			}
 		} else {
 			toggleWidget(node, findWidgetByName(node, 'seed'), true)
-			toggleWidget(node, findWidgetByName(node, 'control_before_generate'), true)
-			toggleWidget(node, findWidgetByName(node, 'control_after_generate'), true)
+			if(control_before_widget){
+				if(control_before_widget?.last_value) control_before_widget.value = control_before_widget.last_value
+				toggleWidget(node, control_before_widget, true)
+			}
+			if(control_after_widget) {
+				if(control_after_widget?.last_value) control_after_widget.value = control_after_widget.last_value
+				toggleWidget(node, findWidgetByName(node, control_after_widget, true))
+			}
 		}
 		updateNodeHeight(node)
 	}
@@ -188,6 +204,15 @@ function widgetLogic(node, widget) {
 			toggleWidget(node, findWidgetByName(node, 'empty_latent_height'), false)
 		}
 	}
+	if (widget.name === 'ratio') {
+		if (widget.value === "custom") {
+			toggleWidget(node, findWidgetByName(node, 'empty_latent_width'), true)
+			toggleWidget(node, findWidgetByName(node, 'empty_latent_height'), true)
+		} else {
+			toggleWidget(node, findWidgetByName(node, 'empty_latent_width'), false)
+			toggleWidget(node, findWidgetByName(node, 'empty_latent_height'), false)
+		}
+	}
 	if (widget.name === 'downscale_mode') {
 		const widget_names = ['block_number', 'downscale_factor', 'start_percent', 'end_percent', 'downscale_after_skip', 'downscale_method', 'upscale_method']
 		if (widget.value === "None") widget_names.map(name=> toggleWidget(node, findWidgetByName(node, name)))
@@ -255,7 +280,8 @@ function widgetLogic(node, widget) {
             'FACEID',
             'FACEID PLUS - SD1.5 only',
             'FACEID PLUS V2',
-			'FACEID PORTRAIT (style transfer)'
+			'FACEID PORTRAIT (style transfer)',
+			'FACEID PORTRAIT UNNORM - SDXL only (strong)'
         ]
 		if(normol_presets.includes(widget.value)){
 			toggleWidget(node, findWidgetByName(node, 'lora_strength'))
@@ -276,7 +302,7 @@ function widgetLogic(node, widget) {
 			}else{
 				toggleWidget(node, findWidgetByName(node, 'weight_faceidv2'))
 			}
-			if(widget.value == 'FACEID PORTRAIT (style transfer)'){
+			if(['FACEID PORTRAIT (style transfer)','FACEID PORTRAIT UNNORM - SDXL only (strong)'].includes(widget.value)){
 				toggleWidget(node, findWidgetByName(node, 'lora_strength'), false)
 			}
 			else{
@@ -394,6 +420,25 @@ function widgetLogic(node, widget) {
 				toggleWidget(node, findWidgetByName(node, 'start_at'), true)
 				toggleWidget(node, findWidgetByName(node, 'end_at'), true)
 				break
+		}
+		updateNodeHeight(node)
+	}
+
+	if(widget.name == 't5_type'){
+		switch (widget.value){
+			case 'sd3':
+				toggleWidget(node, findWidgetByName(node, 'clip_name'), true)
+				toggleWidget(node, findWidgetByName(node, 'padding'), true)
+				toggleWidget(node, findWidgetByName(node, 't5_name'))
+				toggleWidget(node, findWidgetByName(node, 'device'))
+				toggleWidget(node, findWidgetByName(node, 'dtype'))
+				break
+			case 't5v11':
+				toggleWidget(node, findWidgetByName(node, 'clip_name'))
+				toggleWidget(node, findWidgetByName(node, 'padding'))
+				toggleWidget(node, findWidgetByName(node, 't5_name'),true)
+				toggleWidget(node, findWidgetByName(node, 'device'),true)
+				toggleWidget(node, findWidgetByName(node, 'dtype'),true)
 		}
 		updateNodeHeight(node)
 	}
@@ -648,6 +693,8 @@ app.registerExtension({
 			case "easy svdLoader":
 			case "easy dynamiCrafterLoader":
 			case "easy hunyuanDiTLoader":
+			case "easy pixArtLoader":
+			case "easy kolorsLoader":
 			case "easy loraStack":
 			case "easy controlnetStack":
 			case "easy latentNoisy":
@@ -1189,10 +1236,10 @@ const getSetWidgets = ['rescale_after_model', 'rescale',
 						'refiner_lora1_name', 'refiner_lora2_name', 'upscale_method', 
 						'image_output', 'add_noise', 'info', 'sampler_name',
 						'ckpt_B_name', 'ckpt_C_name', 'save_model', 'refiner_ckpt_name',
-						'num_loras', 'num_controlnet', 'mode', 'toggle', 'resolution', 'target_parameter',
+						'num_loras', 'num_controlnet', 'mode', 'toggle', 'resolution', 'ratio', 'target_parameter',
 	'input_count', 'replace_count', 'downscale_mode', 'range_mode','text_combine_mode', 'input_mode',
 	'lora_count','ckpt_count', 'conditioning_mode', 'preset', 'use_tiled', 'use_batch', 'num_embeds',
-	"easing_mode", "guider", "scheduler", "inpaint_mode",
+	"easing_mode", "guider", "scheduler", "inpaint_mode", 't5_type'
 ]
 
 function getSetters(node) {

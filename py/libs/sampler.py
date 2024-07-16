@@ -8,6 +8,7 @@ from nodes import MAX_RESOLUTION
 from PIL import Image
 from typing import Dict, List, Optional, Tuple, Union, Any
 from ..brushnet.model_patch import add_model_patch
+from ..kolors.model_patch import patched_set_conds
 
 class easySampler:
     def __init__(self):
@@ -52,7 +53,6 @@ class easySampler:
         return parts
 
     def emptyLatent(self, resolution, empty_latent_width, empty_latent_height, batch_size=1, compression=0, sd3=False):
-        print(resolution)
         if resolution not in ["自定义 x 自定义", 'width x height (custom)']:
             try:
                 width, height = map(int, resolution.split(' x '))
@@ -73,7 +73,6 @@ class easySampler:
 
             samples = ({"samples": latent_c}, {"samples": latent_b})
         return samples
-
 
     def common_ksampler(self, model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent, denoise=1.0,
                         disable_noise=False, start_step=None, last_step=None, force_full_denoise=False,
@@ -110,9 +109,11 @@ class easySampler:
             noise = comfy.sample.prepare_noise(latent_image, seed, batch_inds)
 
         #######################################################################################
+        # add model patch
         # brushnet
         add_model_patch(model)
-        #
+        # kolors
+        model, positive, negative, _ = patched_set_conds(model, positive, negative, None)
         #######################################################################################
         samples = comfy.sample.sample(model, noise, steps, cfg, sampler_name, scheduler, positive, negative,
                                       latent_image,
@@ -157,10 +158,6 @@ class easySampler:
             if previewer:
                 preview_bytes = previewer.decode_latent_to_preview_image(preview_format, x0)
             pbar.update_absolute(step + 1, total_steps, preview_bytes)
-
-        # samples = comfy.sample.sample_custom(model, noise, cfg, _sampler, sigmas, positive, negative, latent_image,
-        #                                      noise_mask=noise_mask, callback=callback, disable_pbar=disable_pbar,
-        #                                      seed=seed)
 
         samples = comfy.samplers.sample(model, noise, positive, negative, cfg, device, _sampler, sigmas, latent_image=latent_image, model_options=model.model_options,
                denoise_mask=noise_mask, callback=callback, disable_pbar=disable_pbar, seed=seed)
