@@ -486,7 +486,6 @@ class easyLoader:
         else:
             from ..kolors.loader import applyKolorsUnet
             with applyKolorsUnet():
-
                 unet_path = folder_paths.get_full_path("unet", unet_name)
                 sd = comfy.utils.load_torch_file(unet_path)
                 model = comfy.sd.load_unet_state_dict(sd)
@@ -582,7 +581,10 @@ class easyLoader:
         return model
 
     def load_t5_from_sd3_clip(self, sd3_clip, padding):
-        from comfy.sd3_clip import SD3Tokenizer, SD3ClipModel
+        try:
+            from comfy.text_encoders.sd3_clip import SD3Tokenizer, SD3ClipModel
+        except:
+            from comfy.sd3_clip import SD3Tokenizer, SD3ClipModel
         import copy
 
         clip = sd3_clip.clone()
