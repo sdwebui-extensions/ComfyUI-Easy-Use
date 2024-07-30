@@ -2,11 +2,7 @@ import sys, os, re, json, time
 import torch
 import folder_paths
 import numpy as np
-import comfy.utils, comfy.sample, comfy.samplers, comfy.controlnet, comfy.model_base, comfy.model_management
-try:
-    import comfy.sampler_helpers, comfy.supported_models
-except:
-    pass
+import comfy.utils, comfy.sample, comfy.samplers, comfy.controlnet, comfy.model_base, comfy.model_management, comfy.sampler_helpers, comfy.supported_models
 from comfy.sd import CLIP, VAE
 from comfy.model_patcher import ModelPatcher
 from comfy_extras.chainner_models import model_loading
@@ -933,17 +929,18 @@ class fullLoader:
         model, clip, vae, clip_vision, lora_stack = easyCache.load_main(ckpt_name, config_name, vae_name, lora_name, lora_model_strength, lora_clip_strength, optional_lora_stack, model_override, clip_override, vae_override, prompt)
 
         # Create Empty Latent
-        sd3 = True if get_sd_version(model) == 'sd3' else False
+        model_type = get_sd_version(model)
+        sd3 = True if model_type == "sd3" else False
         samples = sampler.emptyLatent(resolution, empty_latent_width, empty_latent_height, batch_size, sd3=sd3)
 
         # Prompt to Conditioning
-        positive_embeddings_final, positive_wildcard_prompt, model, clip = prompt_to_cond('positive', model, clip, clip_skip, lora_stack, positive, positive_token_normalization, positive_weight_interpretation, a1111_prompt_style, my_unique_id, prompt, easyCache)
-        negative_embeddings_final, negative_wildcard_prompt, model, clip = prompt_to_cond('negative', model, clip, clip_skip, lora_stack, negative, negative_token_normalization, negative_weight_interpretation, a1111_prompt_style, my_unique_id, prompt, easyCache)
+        positive_embeddings_final, positive_wildcard_prompt, model, clip = prompt_to_cond('positive', model, clip, clip_skip, lora_stack, positive, positive_token_normalization, positive_weight_interpretation, a1111_prompt_style, my_unique_id, prompt, easyCache, model_type=model_type)
+        negative_embeddings_final, negative_wildcard_prompt, model, clip = prompt_to_cond('negative', model, clip, clip_skip, lora_stack, negative, negative_token_normalization, negative_weight_interpretation, a1111_prompt_style, my_unique_id, prompt, easyCache, model_type=model_type)
 
         # Conditioning add controlnet
         if optional_controlnet_stack is not None and len(optional_controlnet_stack) > 0:
             for controlnet in optional_controlnet_stack:
-                positive_embeddings_final, negative_embeddings_final = easyControlnet().apply(controlnet[0], controlnet[5], positive_embeddings_final, negative_embeddings_final, controlnet[1], start_percent=controlnet[2], end_percent=controlnet[3], control_net=None, scale_soft_weights=controlnet[4], mask=None, easyCache=easyCache, use_cache=True)
+                positive_embeddings_final, negative_embeddings_final = easyControlnet().apply(controlnet[0], controlnet[5], positive_embeddings_final, negative_embeddings_final, controlnet[1], start_percent=controlnet[2], end_percent=controlnet[3], control_net=None, scale_soft_weights=controlnet[4], mask=None, easyCache=easyCache, use_cache=True, model=model)
 
         log_node_warn("加载完毕...")
         pipe = {
@@ -1074,6 +1071,53 @@ class comfyLoader(fullLoader):
                        positive, negative, batch_size, optional_lora_stack=None, optional_controlnet_stack=None, prompt=None,
                       my_unique_id=None):
         return super().adv_pipeloader(ckpt_name, 'Default', vae_name, clip_skip,
+             lora_name, lora_model_strength, lora_clip_strength,
+             resolution, empty_latent_width, empty_latent_height,
+             positive, 'none', 'comfy',
+             negative, 'none', 'comfy',
+             batch_size, None, None, None, optional_lora_stack=optional_lora_stack, optional_controlnet_stack=optional_controlnet_stack, a1111_prompt_style=False, prompt=prompt,
+             my_unique_id=my_unique_id
+         )
+
+# hydit简易加载器
+class hunyuanDiTLoader(fullLoader):
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "ckpt_name": (folder_paths.get_filename_list("checkpoints"),),
+                "vae_name": (["Baked VAE"] + folder_paths.get_filename_list("vae"),),
+
+                "lora_name": (["None"] + folder_paths.get_filename_list("loras"),),
+                "lora_model_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
+                "lora_clip_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
+
+                "resolution": (resolution_strings, {"default": "1024 x 1024"}),
+                "empty_latent_width": ("INT", {"default": 1024, "min": 64, "max": MAX_RESOLUTION, "step": 8}),
+                "empty_latent_height": ("INT", {"default": 1024, "min": 64, "max": MAX_RESOLUTION, "step": 8}),
+
+                "positive": ("STRING", {"default": "", "placeholder": "Positive", "multiline": True}),
+                "negative": ("STRING", {"default": "", "placeholder": "Negative", "multiline": True}),
+
+                "batch_size": ("INT", {"default": 1, "min": 1, "max": 64}),
+            },
+            "optional": {"optional_lora_stack": ("LORA_STACK",), "optional_controlnet_stack": ("CONTROL_NET_STACK",),},
+            "hidden": {"prompt": "PROMPT", "my_unique_id": "UNIQUE_ID"}
+        }
+
+    RETURN_TYPES = ("PIPE_LINE", "MODEL", "VAE")
+    RETURN_NAMES = ("pipe", "model", "vae")
+
+    FUNCTION = "hyditloader"
+    CATEGORY = "EasyUse/Loaders"
+
+    def hyditloader(self, ckpt_name, vae_name,
+                       lora_name, lora_model_strength, lora_clip_strength,
+                       resolution, empty_latent_width, empty_latent_height,
+                       positive, negative, batch_size, optional_lora_stack=None, optional_controlnet_stack=None, prompt=None,
+                      my_unique_id=None):
+
+        return super().adv_pipeloader(ckpt_name, 'Default', vae_name, 0,
              lora_name, lora_model_strength, lora_clip_strength,
              resolution, empty_latent_width, empty_latent_height,
              positive, 'none', 'comfy',
@@ -1796,7 +1840,9 @@ class kolorsLoader:
             },
             "optional": {
                 "model_override": ("MODEL",),
+                "vae_override": ("VAE",),
                 "optional_lora_stack": ("LORA_STACK",),
+                "auto_clean_gpu": ("BOOLEAN", {"default": False}),
             },
             "hidden": {"prompt": "PROMPT", "my_unique_id": "UNIQUE_ID"}
         }
@@ -1807,14 +1853,17 @@ class kolorsLoader:
     FUNCTION = "adv_pipeloader"
     CATEGORY = "EasyUse/Loaders"
 
-    def adv_pipeloader(self, unet_name, vae_name, chatglm3_name, lora_name, lora_model_strength, lora_clip_strength, resolution, empty_latent_width, empty_latent_height, positive, negative, batch_size, model_override=None, optional_lora_stack=None, prompt=None, my_unique_id=None):
+    def adv_pipeloader(self, unet_name, vae_name, chatglm3_name, lora_name, lora_model_strength, lora_clip_strength, resolution, empty_latent_width, empty_latent_height, positive, negative, batch_size, model_override=None, optional_lora_stack=None, vae_override=None, auto_clean_gpu=False, prompt=None, my_unique_id=None):
         # load unet
         if model_override:
            model = model_override
         else:
            model = easyCache.load_kolors_unet(unet_name)
         # load vae
-        vae = easyCache.load_vae(vae_name)
+        if vae_override:
+           vae = vae_override
+        else:
+           vae = easyCache.load_vae(vae_name)
         # load chatglm3
         chatglm3_model = easyCache.load_chatglm3(chatglm3_name)
         # load lora
@@ -1837,9 +1886,9 @@ class kolorsLoader:
 
         # text encode
         log_node_warn("正在进行正向提示词编码...")
-        positive_embeddings_final = chatglm3_adv_text_encode(chatglm3_model, positive)
+        positive_embeddings_final = chatglm3_adv_text_encode(chatglm3_model, positive, auto_clean_gpu)
         log_node_warn("正在进行负面提示词编码...")
-        negative_embeddings_final = chatglm3_adv_text_encode(chatglm3_model, negative)
+        negative_embeddings_final = chatglm3_adv_text_encode(chatglm3_model, negative, auto_clean_gpu)
 
         # empty latent
         samples = sampler.emptyLatent(resolution, empty_latent_width, empty_latent_height, batch_size)
@@ -1870,6 +1919,7 @@ class kolorsLoader:
                 "empty_latent_width": empty_latent_width,
                 "empty_latent_height": empty_latent_height,
                 "batch_size": batch_size,
+                "auto_clean_gpu": auto_clean_gpu,
             }
         }
 
@@ -1882,145 +1932,7 @@ class kolorsLoader:
 
 # Dit Loader
 from .dit.utils import string_to_dtype
-from .dit.hunyuanDiT.config import hydit_conf, dtypes, devices
 from .dit.pixArt.config import pixart_conf, pixart_res
-class hunyuanDiTLoader:
-    @classmethod
-    def INPUT_TYPES(cls):
-        for k in range(1, torch.cuda.device_count()):
-            devices.append(f"cuda:{k}")
-        return {
-            "required": {
-                "ckpt_name": (folder_paths.get_filename_list("checkpoints"),),
-                "model_name":(list(hydit_conf.keys()),{"default":"G/2"}),
-                "vae_name": (folder_paths.get_filename_list("vae"),),
-                "clip_name": (folder_paths.get_filename_list("clip"),),
-                "mt5_name": (folder_paths.get_filename_list("t5"),),
-                "device": (devices, {"default": "cpu"}),
-                "dtype": (dtypes,),
-                "resolution": (resolution_strings,{'default':'1024 x 1024'}),
-                "empty_latent_width": ("INT", {"default": 1024, "min": 64, "max": MAX_RESOLUTION, "step": 8}),
-                "empty_latent_height": ("INT", {"default": 1024, "min": 64, "max": MAX_RESOLUTION, "step": 8}),
-
-                "positive": ("STRING", {"default": "", "placeholder": "Positive", "multiline": True}),
-                "negative": ("STRING", {"default": "", "placeholder": "Negative", "multiline": True}),
-
-                "batch_size": ("INT", {"default": 1, "min": 1, "max": 64}),
-            },
-            "hidden": {"prompt": "PROMPT", "my_unique_id": "UNIQUE_ID"}
-        }
-
-    RETURN_TYPES = ("PIPE_LINE", "MODEL", "VAE")
-    RETURN_NAMES = ("pipe", "model", "vae")
-    FUNCTION = "hydit_pipeloader"
-    CATEGORY = "EasyUse/Loaders"
-
-    def text_encoder(self, text, text_t5, clip, t5):
-        # T5
-        t5.load_model()
-        t5_pre = t5.tokenizer(
-            text_t5,
-            max_length=t5.cond_stage_model.max_length,
-            padding='max_length',
-            truncation=True,
-            return_attention_mask=True,
-            add_special_tokens=True,
-            return_tensors='pt'
-        )
-        t5_mask = t5_pre["attention_mask"]
-        with torch.no_grad():
-            t5_outs = t5.cond_stage_model.transformer(
-                input_ids=t5_pre["input_ids"].to(t5.load_device),
-                attention_mask=t5_mask.to(t5.load_device),
-                output_hidden_states=True,
-            )
-            # to-do: replace -1 for clip skip
-            t5_embs = t5_outs["hidden_states"][-1].float().cpu()
-
-        # clip
-        clip.load_model()
-        clip_pre = clip.tokenizer(
-            text,
-            max_length=clip.cond_stage_model.max_length,
-            padding='max_length',
-            truncation=True,
-            return_attention_mask=True,
-            add_special_tokens=True,
-            return_tensors='pt'
-        )
-        clip_mask = clip_pre["attention_mask"]
-        with torch.no_grad():
-            clip_outs = clip.cond_stage_model.transformer(
-                input_ids=clip_pre["input_ids"].to(clip.load_device),
-                attention_mask=clip_mask.to(clip.load_device),
-            )
-            # to-do: add hidden states
-            clip_embs = clip_outs[0].float().cpu()
-
-        # combined cond
-        return ([[
-            clip_embs, {
-                "context_t5": t5_embs,
-                "context_mask": clip_mask.float(),
-                "context_t5_mask": t5_mask.float()
-            }
-        ]],)
-
-    def hydit_pipeloader(self, ckpt_name, model_name, vae_name, clip_name, mt5_name, device, dtype, resolution, empty_latent_width, empty_latent_height, positive, negative, batch_size, prompt=None, my_unique_id=None):
-        dtype = string_to_dtype(dtype, "text_encoder")
-        if device == "cpu":
-            assert dtype in [None, torch.float32,
-                             torch.bfloat16], f"Can't use dtype '{dtype}' with CPU! Set dtype to 'default' or 'bf16'."
-
-        # Clean models from loaded_objects
-        easyCache.update_loaded_objects(prompt)
-
-        # Load models
-        log_node_warn("正在加载模型...")
-        # load checkpoint
-        model = easyCache.load_dit_ckpt(ckpt_name=ckpt_name, model_name=model_name, hydit_conf=hydit_conf, model_type='HyDiT')
-        # load vae
-        vae = easyCache.load_vae(vae_name)
-        # load clip
-        clip = easyCache.load_dit_clip(clip_name=clip_name, device=device, dtype=dtype, model_type='HyDiT')
-        # load t5
-        t5 = easyCache.load_dit_t5(t5_name=mt5_name, device=device, dtype=dtype, model_type='HyDiT')
-
-        # Create Empty Latent
-        samples = sampler.emptyLatent(resolution, empty_latent_width, empty_latent_height, batch_size, sd3=False)
-
-        # t5 text encoder
-        positive_embeddings_final, = self.text_encoder(positive, positive, clip, t5)
-        negative_embeddings_final, = self.text_encoder(negative, negative, clip, t5)
-
-        log_node_warn("加载完毕...")
-        pipe = {
-            "model": model,
-            "positive": positive_embeddings_final,
-            "negative": negative_embeddings_final,
-            "vae": vae,
-            "clip": clip,
-
-            "samples": samples,
-            "images": None,
-
-            "loader_settings": {
-                "ckpt_name": ckpt_name,
-                "clip_name": clip_name,
-                "vae_name": vae_name,
-                "mt5_name": mt5_name,
-
-                "positive": positive,
-                "negative": negative,
-                "resolution": resolution,
-                "empty_latent_width": empty_latent_width,
-                "empty_latent_height": empty_latent_height,
-                "batch_size": batch_size,
-            }
-        }
-
-        return {"ui": {},
-                "result": (pipe, model, vae, clip, positive_embeddings_final, negative_embeddings_final, samples)}
 
 class pixArtLoader:
     @classmethod
@@ -2036,8 +1948,8 @@ class pixArtLoader:
                 "clip_name": (folder_paths.get_filename_list("clip"),),
                 "padding": ("INT", {"default": 1, "min": 1, "max": 300}),
                 "t5_name": (folder_paths.get_filename_list("t5"),),
-                "device": (devices, {"default": "cpu"}),
-                "dtype": (dtypes,),
+                "device": (["auto", "cpu", "gpu"], {"default": "cpu"}),
+                "dtype": (["default", "auto (comfy)", "FP32", "FP16", "BF16"],),
 
                 "lora_name": (["None"] + folder_paths.get_filename_list("loras"),),
                 "lora_model_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
@@ -2291,7 +2203,7 @@ class controlnetSimple:
 
     def controlnetApply(self, pipe, image, control_net_name, control_net=None, strength=1, scale_soft_weights=1, union_type=None):
 
-        positive, negative = easyControlnet().apply(control_net_name, image, pipe["positive"], pipe["negative"], strength, 0, 1, control_net, scale_soft_weights, mask=None, easyCache=easyCache)
+        positive, negative = easyControlnet().apply(control_net_name, image, pipe["positive"], pipe["negative"], strength, 0, 1, control_net, scale_soft_weights, mask=None, easyCache=easyCache, model=pipe['model'])
 
         new_pipe = {
             "model": pipe['model'],
@@ -2341,7 +2253,7 @@ class controlnetAdvanced:
 
     def controlnetApply(self, pipe, image, control_net_name, control_net=None, strength=1, start_percent=0, end_percent=1, scale_soft_weights=1):
         positive, negative = easyControlnet().apply(control_net_name, image, pipe["positive"], pipe["negative"],
-                                                    strength, start_percent, end_percent, control_net, scale_soft_weights, union_type=None, mask=None, easyCache=easyCache)
+                                                    strength, start_percent, end_percent, control_net, scale_soft_weights, union_type=None, mask=None, easyCache=easyCache, model=pipe['model'])
 
         new_pipe = {
             "model": pipe['model'],
@@ -2405,7 +2317,7 @@ class controlnetPlusPlus:
                     f"[Advanced-ControlNet Not Found] you need to install 'COMFYUI-Advanced-ControlNet'")
         else:
             positive, negative = easyControlnet().apply(control_net_name, image, pipe["positive"], pipe["negative"],
-                                                        strength, start_percent, end_percent, control_net, scale_soft_weights, union_type=union_type, mask=None, easyCache=easyCache)
+                                                        strength, start_percent, end_percent, control_net, scale_soft_weights, union_type=union_type, mask=None, easyCache=easyCache, model=pipe['model'])
 
         new_pipe = {
             "model": pipe['model'],
@@ -2885,7 +2797,6 @@ def insightface_loader(provider):
     return model
 
 # Apply Ipadapter
-from .kolors.ipadapter_patch import IPAdapterPlus as ipadapter_patch
 class ipadapter:
 
     def __init__(self):
@@ -2962,7 +2873,7 @@ class ipadapter:
                 pattern = 'ip.adapter.plus.sd15\.(safetensors|bin)$'
         elif preset.startswith("plus (kolors"):
             if is_sdxl:
-                pattern = 'plus.genernal\.(safetensors|bin)$'
+                pattern = 'plus.gener(nal|al)\.(safetensors|bin)$'
             else:
                 raise Exception("kolors model is not supported for SD15")
         elif preset.startswith("plus face"):
@@ -3100,8 +3011,8 @@ class ipadapter:
                     model_url = IPADAPTER_CLIPVISION_MODELS["clip-vit-large-patch14-336"]["model_url"]
                     clipvision_file = get_local_filepath(model_url, IPADAPTER_DIR, "clip-vit-large-patch14-336.bin")
                 else:
-                    model_url = IPADAPTER_CLIPVISION_MODELS["clip-vit-h-14-32b-b79k"]["model_url"]
-                    clipvision_file = get_local_filepath(model_url, IPADAPTER_DIR, "clip-vit-h-14-32b-b79k.safetensors")
+                    model_url = IPADAPTER_CLIPVISION_MODELS["clip-vit-h-14-laion2B-s32B-b79K"]["model_url"]
+                    clipvision_file = get_local_filepath(model_url, IPADAPTER_DIR, "clip-vit-h-14-laion2B-s32B-b79K.safetensors")
                 clipvision_name = os.path.basename(model_url)
             if clipvision_file == pipeline['clipvision']['file']:
                 clip_vision = pipeline['clipvision']['model']
@@ -3109,11 +3020,7 @@ class ipadapter:
                 log_node_info("easy ipadapterApply", f"Using ClipVisonModel {clipvision_name} Cached")
                 _, clip_vision = backend_cache.cache[clipvision_name][1]
             else:
-                if preset.lower().startswith("plus (kolors"):
-                    from .kolors.loader import load_kolors_clip_vision
-                    clip_vision = load_kolors_clip_vision(clipvision_file)
-                else:
-                    clip_vision = load_clip_vision(clipvision_file)
+                clip_vision = load_clip_vision(clipvision_file)
                 log_node_info("easy ipadapterApply", f"Using ClipVisonModel {clipvision_name}")
                 if cache_mode in ["all", "clip_vision only"]:
                     backend_cache.update_cache(clipvision_name, 'clip_vision', (False, clip_vision))
@@ -3204,14 +3111,9 @@ class ipadapterApply(ipadapter):
         images, masks = image, [None]
         model, ipadapter = self.load_model(model, preset, lora_strength, provider, clip_vision=None, optional_ipadapter=optional_ipadapter, cache_mode=cache_mode)
         if use_tiled and preset not in self.faceid_presets:
-            # kolors
-            if preset.lower().startswith("plus (kolors"):
-                model, images, masks = ipadapter_patch.apply_tiled(model, ipadapter, image, weight, "linear", start_at, end_at, sharpening=0.0, combine_embeds="concat", image_negative=None, attn_mask=attn_mask, clip_vision=None, embeds_scaling='V only')
-            # normal
-            else:
-                if "IPAdapterTiled" not in ALL_NODE_CLASS_MAPPINGS:
-                    self.error()
-                cls = ALL_NODE_CLASS_MAPPINGS["IPAdapterTiled"]
+            if "IPAdapterTiled" not in ALL_NODE_CLASS_MAPPINGS:
+                self.error()
+            cls = ALL_NODE_CLASS_MAPPINGS["IPAdapterTiled"]
             model, images, masks = cls().apply_tiled(model, ipadapter, image, weight, "linear", start_at, end_at, sharpening=0.0, combine_embeds="concat", image_negative=None, attn_mask=attn_mask, clip_vision=None, embeds_scaling='V only')
         else:
             if preset in ['FACEID PLUS V2', 'FACEID PORTRAIT (style transfer)']:
@@ -3220,15 +3122,10 @@ class ipadapterApply(ipadapter):
                 cls = ALL_NODE_CLASS_MAPPINGS["IPAdapterAdvanced"]
                 model, images = cls().apply_ipadapter(model, ipadapter, start_at=start_at, end_at=end_at, weight=weight, weight_type="linear", combine_embeds="concat", weight_faceidv2=weight_faceidv2, image=image, image_negative=None, clip_vision=None, attn_mask=attn_mask, insightface=None, embeds_scaling='V only')
             else:
-                # kolors
-                if preset.lower().startswith("plus (kolors"):
-                    model, images = ipadapter_patch.apply_simple(model, ipadapter, image, weight, start_at, end_at,weight_type='standard', attn_mask=attn_mask)
-                # normal
-                else:
-                    if "IPAdapter" not in ALL_NODE_CLASS_MAPPINGS:
-                        self.error()
-                    cls = ALL_NODE_CLASS_MAPPINGS["IPAdapter"]
-                    model, images = cls().apply_ipadapter(model, ipadapter, image, weight, start_at, end_at, weight_type='standard', attn_mask=attn_mask)
+                if "IPAdapter" not in ALL_NODE_CLASS_MAPPINGS:
+                    self.error()
+                cls = ALL_NODE_CLASS_MAPPINGS["IPAdapter"]
+                model, images = cls().apply_ipadapter(model, ipadapter, image, weight, start_at, end_at, weight_type='standard', attn_mask=attn_mask)
         if images is None:
             images = image
         return (model, images, masks, ipadapter,)
@@ -3281,49 +3178,30 @@ class ipadapterApplyAdvanced(ipadapter):
         images, masks = image, [None]
         model, ipadapter = self.load_model(model, preset, lora_strength, provider, clip_vision=clip_vision, optional_ipadapter=optional_ipadapter, cache_mode=cache_mode)
         if layer_weights:
-            # kolors
-            if preset.lower().startswith("plus (kolors"):
-                model, images = ipadapter_patch.apply_advanced(model, ipadapter, weight=weight, weight_type=weight_type, start_at=start_at, end_at=end_at, combine_embeds=combine_embeds, weight_faceidv2=weight_faceidv2, image=image, image_negative=image_negative, weight_style=weight_style, weight_composition=weight_composition, image_style=image_style, image_composition=image_composition, expand_style=expand_style, clip_vision=clip_vision, attn_mask=attn_mask, insightface=None, embeds_scaling=embeds_scaling, layer_weights=layer_weights, unfold_batch=use_batch)
-            # normal
+            if "IPAdapterMS" not in ALL_NODE_CLASS_MAPPINGS:
+                self.error()
+            cls = ALL_NODE_CLASS_MAPPINGS["IPAdapterAdvanced"]
+            model, images = cls().apply_ipadapter(model, ipadapter, weight=weight, weight_type=weight_type, start_at=start_at, end_at=end_at, combine_embeds=combine_embeds, weight_faceidv2=weight_faceidv2, image=image, image_negative=image_negative, weight_style=weight_style, weight_composition=weight_composition, image_style=image_style, image_composition=image_composition, expand_style=expand_style, clip_vision=clip_vision, attn_mask=attn_mask, insightface=None, embeds_scaling=embeds_scaling, layer_weights=layer_weights)
+        elif use_tiled:
+            if use_batch:
+                if "IPAdapterTiledBatch" not in ALL_NODE_CLASS_MAPPINGS:
+                    self.error()
+                cls = ALL_NODE_CLASS_MAPPINGS["IPAdapterTiledBatch"]
             else:
-                if "IPAdapterMS" not in ALL_NODE_CLASS_MAPPINGS:
+                if "IPAdapterTiled" not in ALL_NODE_CLASS_MAPPINGS:
+                    self.error()
+                cls = ALL_NODE_CLASS_MAPPINGS["IPAdapterTiled"]
+            model, images, masks = cls().apply_tiled(model, ipadapter, image=image, weight=weight, weight_type=weight_type, start_at=start_at, end_at=end_at, sharpening=sharpening, combine_embeds=combine_embeds, image_negative=image_negative, attn_mask=attn_mask, clip_vision=clip_vision, embeds_scaling=embeds_scaling)
+        else:
+            if use_batch:
+                if "IPAdapterBatch" not in ALL_NODE_CLASS_MAPPINGS:
+                    self.error()
+                cls = ALL_NODE_CLASS_MAPPINGS["IPAdapterBatch"]
+            else:
+                if "IPAdapterAdvanced" not in ALL_NODE_CLASS_MAPPINGS:
                     self.error()
                 cls = ALL_NODE_CLASS_MAPPINGS["IPAdapterAdvanced"]
-                model, images = cls().apply_ipadapter(model, ipadapter, weight=weight, weight_type=weight_type, start_at=start_at, end_at=end_at, combine_embeds=combine_embeds, weight_faceidv2=weight_faceidv2, image=image, image_negative=image_negative, weight_style=weight_style, weight_composition=weight_composition, image_style=image_style, image_composition=image_composition, expand_style=expand_style, clip_vision=clip_vision, attn_mask=attn_mask, insightface=None, embeds_scaling=embeds_scaling, layer_weights=layer_weights)
-        elif use_tiled:
-            # kolors
-            if preset.lower().startswith("plus (kolors"):
-                model, images, masks = ipadapter_patch.apply_tiled(model, ipadapter, image=image, weight=weight,
-                                                         weight_type=weight_type, start_at=start_at, end_at=end_at,
-                                                         sharpening=sharpening, combine_embeds=combine_embeds,
-                                                         image_negative=image_negative, attn_mask=attn_mask,
-                                                         clip_vision=clip_vision, embeds_scaling=embeds_scaling, unfold_batch=use_batch)
-            # normal
-            else:
-                if use_batch:
-                    if "IPAdapterTiledBatch" not in ALL_NODE_CLASS_MAPPINGS:
-                        self.error()
-                    cls = ALL_NODE_CLASS_MAPPINGS["IPAdapterTiledBatch"]
-                else:
-                    if "IPAdapterTiled" not in ALL_NODE_CLASS_MAPPINGS:
-                        self.error()
-                    cls = ALL_NODE_CLASS_MAPPINGS["IPAdapterTiled"]
-                model, images, masks = cls().apply_tiled(model, ipadapter, image=image, weight=weight, weight_type=weight_type, start_at=start_at, end_at=end_at, sharpening=sharpening, combine_embeds=combine_embeds, image_negative=image_negative, attn_mask=attn_mask, clip_vision=clip_vision, embeds_scaling=embeds_scaling)
-        else:
-            # kolors
-            if preset.lower().startswith("plus (kolors"):
-                model, images = ipadapter_patch.apply_advanced(model, ipadapter, weight=weight, weight_type=weight_type, start_at=start_at, end_at=end_at, combine_embeds=combine_embeds, weight_faceidv2=weight_faceidv2, image=image, image_negative=image_negative, weight_style=1.0, weight_composition=1.0, image_style=image_style, image_composition=image_composition, expand_style=expand_style, clip_vision=clip_vision, attn_mask=attn_mask, insightface=None, embeds_scaling=embeds_scaling, unfold_batch=use_batch)
-            # normal
-            else:
-                if use_batch:
-                    if "IPAdapterBatch" not in ALL_NODE_CLASS_MAPPINGS:
-                        self.error()
-                    cls = ALL_NODE_CLASS_MAPPINGS["IPAdapterBatch"]
-                else:
-                    if "IPAdapterAdvanced" not in ALL_NODE_CLASS_MAPPINGS:
-                        self.error()
-                    cls = ALL_NODE_CLASS_MAPPINGS["IPAdapterAdvanced"]
-                model, images = cls().apply_ipadapter(model, ipadapter, weight=weight, weight_type=weight_type, start_at=start_at, end_at=end_at, combine_embeds=combine_embeds, weight_faceidv2=weight_faceidv2, image=image, image_negative=image_negative, weight_style=1.0, weight_composition=1.0, image_style=image_style, image_composition=image_composition, expand_style=expand_style, clip_vision=clip_vision, attn_mask=attn_mask, insightface=None, embeds_scaling=embeds_scaling)
+            model, images = cls().apply_ipadapter(model, ipadapter, weight=weight, weight_type=weight_type, start_at=start_at, end_at=end_at, combine_embeds=combine_embeds, weight_faceidv2=weight_faceidv2, image=image, image_negative=image_negative, weight_style=1.0, weight_composition=1.0, image_style=image_style, image_composition=image_composition, expand_style=expand_style, clip_vision=clip_vision, attn_mask=attn_mask, insightface=None, embeds_scaling=embeds_scaling)
         if images is None:
             images = image
         return (model, images, masks, ipadapter)
@@ -4217,7 +4095,6 @@ class samplerSettingsNoiseIn:
 
 # 预采样设置（自定义）
 import comfy_extras.nodes_custom_sampler as custom_samplers
-from .kolors.model_patch import patched_set_conds
 from tqdm import trange
 class samplerCustomSettings:
 
@@ -4427,22 +4304,10 @@ class samplerCustomSettings:
 
         # guider
         if guider == 'CFG':
-            # --------------------------------
-            # kolors  patch set conditioning
-            model, positive, negative, _ = patched_set_conds(model, positive, negative, None)
-            # --------------------------------
             _guider, = self.get_custom_cls('CFGGuider').get_guider(model, positive, negative, cfg)
         elif guider in ['DualCFG', 'IP2P+DualCFG']:
-            # --------------------------------
-            # kolors patch set conditioning
-            model, positive, negative, middle = patched_set_conds(model, positive, pipe['negative'], negative)
-            # --------------------------------
             _guider, =  self.get_custom_cls('DualCFGGuider').get_guider(model, positive, middle, negative, cfg, cfg_negative)
         else:
-            # --------------------------------
-            # kolors patch set conditioning
-            model, positive, negative, _ = patched_set_conds(model, positive, negative, None)
-            # --------------------------------
             _guider, = self.get_custom_cls('BasicGuider').get_guider(model, positive)
 
         # sampler
@@ -6843,9 +6708,6 @@ class pipeOut:
 
 # 编辑节点束
 class pipeEdit:
-    def __init__(self):
-        pass
-
     @classmethod
     def INPUT_TYPES(s):
         return {
@@ -6883,11 +6745,11 @@ class pipeEdit:
 
     RETURN_TYPES = ("PIPE_LINE", "MODEL", "CONDITIONING", "CONDITIONING", "LATENT", "VAE", "CLIP", "IMAGE")
     RETURN_NAMES = ("pipe", "model", "pos", "neg", "latent", "vae", "clip", "image")
-    FUNCTION = "flush"
+    FUNCTION = "edit"
 
     CATEGORY = "EasyUse/Pipe"
 
-    def flush(self, clip_skip, optional_positive, positive_token_normalization, positive_weight_interpretation, optional_negative, negative_token_normalization, negative_weight_interpretation, a1111_prompt_style, conditioning_mode, average_strength, old_cond_start, old_cond_end, new_cond_start, new_cond_end, pipe=None, model=None, pos=None, neg=None, latent=None, vae=None, clip=None, image=None, my_unique_id=None, prompt=None):
+    def edit(self, clip_skip, optional_positive, positive_token_normalization, positive_weight_interpretation, optional_negative, negative_token_normalization, negative_weight_interpretation, a1111_prompt_style, conditioning_mode, average_strength, old_cond_start, old_cond_end, new_cond_start, new_cond_end, pipe=None, model=None, pos=None, neg=None, latent=None, vae=None, clip=None, image=None, my_unique_id=None, prompt=None):
 
         model = model if model is not None else pipe.get("model")
         if model is None:
@@ -6961,6 +6823,76 @@ class pipeEdit:
         del pipe
 
         return (new_pipe, model,pos, neg, latent, vae, clip, image)
+
+# 编辑节点束提示词
+class pipeEditPrompt:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "pipe": ("PIPE_LINE",),
+                "positive": ("STRING", {"default": "", "multiline": True}),
+                "negative": ("STRING", {"default": "", "multiline": True}),
+            },
+            "hidden": {"my_unique_id": "UNIQUE_ID", "prompt": "PROMPT"},
+        }
+
+    RETURN_TYPES = ("PIPE_LINE",)
+    RETURN_NAMES = ("pipe",)
+    FUNCTION = "edit"
+
+    CATEGORY = "EasyUse/Pipe"
+
+    def edit(self, pipe, positive, negative, my_unique_id=None, prompt=None):
+        model = pipe.get("model")
+        if model is None:
+            log_node_warn(f'pipeEdit[{my_unique_id}]', "Model missing from pipeLine")
+
+        from .kolors.loader import is_kolors_model
+        if is_kolors_model(model):
+            auto_clean_gpu = pipe["loader_settings"]["auto_clean_gpu"] if "auto_clean_gpu" in pipe["loader_settings"] else False
+            # text encode
+            log_node_warn("正在进行正向提示词编码...")
+            positive_embeddings_final = chatglm3_adv_text_encode(chatglm3_model, positive, auto_clean_gpu)
+            log_node_warn("正在进行负面提示词编码...")
+            negative_embeddings_final = chatglm3_adv_text_encode(chatglm3_model, negative, auto_clean_gpu)
+        else:
+            model_type = get_sd_version(model)
+            clip_skip = pipe["loader_settings"]["clip_skip"] if "clip_skip" in pipe["loader_settings"] else -1
+            lora_stack = pipe.get("lora_stack") if pipe is not None and "lora_stack" in pipe else []
+            positive_token_normalization = pipe["loader_settings"]["positive_token_normalization"] if "positive_token_normalization" in pipe["loader_settings"] else "none"
+            positive_weight_interpretation = pipe["loader_settings"]["positive_weight_interpretation"] if "positive_weight_interpretation" in pipe["loader_settings"] else "comfy"
+            negative_token_normalization = pipe["loader_settings"]["negative_token_normalization"] if "negative_token_normalization" in pipe["loader_settings"] else "none"
+            negative_weight_interpretation = pipe["loader_settings"]["negative_weight_interpretation"] if "negative_weight_interpretation" in pipe["loader_settings"] else "comfy"
+            a1111_prompt_style = pipe["loader_settings"]["a1111_prompt_style"] if "a1111_prompt_style" in pipe["loader_settings"] else False
+            # Prompt to Conditioning
+            positive_embeddings_final, positive_wildcard_prompt, model, clip = prompt_to_cond('positive', model, clip,
+                                                                                              clip_skip, lora_stack,
+                                                                                              positive,
+                                                                                              positive_token_normalization,
+                                                                                              positive_weight_interpretation,
+                                                                                              a1111_prompt_style,
+                                                                                              my_unique_id, prompt,
+                                                                                              easyCache,
+                                                                                              model_type=model_type)
+            negative_embeddings_final, negative_wildcard_prompt, model, clip = prompt_to_cond('negative', model, clip,
+                                                                                              clip_skip, lora_stack,
+                                                                                              negative,
+                                                                                              negative_token_normalization,
+                                                                                              negative_weight_interpretation,
+                                                                                              a1111_prompt_style,
+                                                                                              my_unique_id, prompt,
+                                                                                              easyCache,
+                                                                                              model_type=model_type)
+        new_pipe = {
+            **pipe,
+            "model": model,
+            "positive": positive_embeddings_final,
+            "negative": negative_embeddings_final,
+        }
+        del pipe
+
+        return (new_pipe,)
 
 
 # 节点束到基础节点束（pipe to ComfyUI-Impack-pack's basic_pipe）
@@ -7537,13 +7469,13 @@ NODE_CLASS_MAPPINGS = {
     "easy fullLoader": fullLoader,
     "easy a1111Loader": a1111Loader,
     "easy comfyLoader": comfyLoader,
+    "easy hunyuanDiTLoader": hunyuanDiTLoader,
     "easy svdLoader": svdLoader,
     "easy sv3dLoader": sv3DLoader,
     "easy zero123Loader": zero123Loader,
     "easy dynamiCrafterLoader": dynamiCrafterLoader,
     "easy cascadeLoader": cascadeLoader,
     "easy kolorsLoader": kolorsLoader,
-    "easy hunyuanDiTLoader": hunyuanDiTLoader,
     "easy pixArtLoader": pixArtLoader,
     "easy loraStack": loraStack,
     "easy controlnetStack": controlnetStack,
@@ -7606,6 +7538,7 @@ NODE_CLASS_MAPPINGS = {
     "easy pipeIn": pipeIn,
     "easy pipeOut": pipeOut,
     "easy pipeEdit": pipeEdit,
+    "easy pipeEditPrompt": pipeEditPrompt,
     "easy pipeToBasicPipe": pipeToBasicPipe,
     "easy pipeBatchIndex": pipeBatchIndex,
     "easy XYPlot": pipeXYPlot,
@@ -7662,7 +7595,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "easy dynamiCrafterLoader": "EasyLoader (DynamiCrafter)",
     "easy cascadeLoader": "EasyCascadeLoader",
     "easy kolorsLoader": "EasyLoader (Kolors)",
-    "easy hunyuanDiTLoader": "EasyLoader (HunYuanDiT)",
+    "easy hunyuanDiTLoader": "EasyLoader (HunyuanDiT)",
     "easy pixArtLoader": "EasyLoader (PixArt)",
     "easy loraStack": "EasyLoraStack",
     "easy controlnetStack": "EasyControlnetStack",
@@ -7725,6 +7658,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "easy pipeIn": "Pipe In",
     "easy pipeOut": "Pipe Out",
     "easy pipeEdit": "Pipe Edit",
+    "easy pipeEditPrompt": "Pipe Edit Prompt",
     "easy pipeBatchIndex": "Pipe Batch Index",
     "easy pipeToBasicPipe": "Pipe -> BasicPipe",
     "easy XYPlot": "XY Plot",

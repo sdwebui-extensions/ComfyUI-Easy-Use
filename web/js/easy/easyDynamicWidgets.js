@@ -9,7 +9,6 @@ import { findWidgetByName, toggleWidget, updateNodeHeight} from "../common/utils
 const seedNodes = ["easy seed", "easy latentNoisy", "easy wildcards", "easy preSampling", "easy preSamplingAdvanced", "easy preSamplingNoiseIn", "easy preSamplingSdTurbo", "easy preSamplingCascade", "easy preSamplingDynamicCFG", "easy preSamplingLayerDiffusion", "easy fullkSampler", "easy fullCascadeKSampler"]
 const loaderNodes = ["easy fullLoader", "easy a1111Loader", "easy comfyLoader", "easy hunyuanDiTLoader", "easy pixArtLoader"]
 
-
 function widgetLogic(node, widget) {
 	if (widget.name === 'lora_name') {
 		if (widget.value === "None") {
@@ -441,6 +440,17 @@ function widgetLogic(node, widget) {
 				toggleWidget(node, findWidgetByName(node, 'dtype'),true)
 		}
 		updateNodeHeight(node)
+	}
+
+	if(widget.name == 'rem_mode'){
+		switch (widget.value){
+			case 'Inspyrenet':
+				toggleWidget(node, findWidgetByName(node, 'torchscript_jit'), true)
+				break
+			default:
+				toggleWidget(node, findWidgetByName(node, 'torchscript_jit'), false)
+				break
+		}
 	}
 }
 
@@ -1232,7 +1242,7 @@ const getSetWidgets = ['rescale_after_model', 'rescale',
 						'num_loras', 'num_controlnet', 'mode', 'toggle', 'resolution', 'ratio', 'target_parameter',
 	'input_count', 'replace_count', 'downscale_mode', 'range_mode','text_combine_mode', 'input_mode',
 	'lora_count','ckpt_count', 'conditioning_mode', 'preset', 'use_tiled', 'use_batch', 'num_embeds',
-	"easing_mode", "guider", "scheduler", "inpaint_mode", 't5_type'
+	"easing_mode", "guider", "scheduler", "inpaint_mode", 't5_type', 'rem_mode'
 ]
 
 function getSetters(node) {
