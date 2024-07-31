@@ -64,6 +64,7 @@ git clone https://github.com/yolain/ComfyUI-Easy-Use
 
 **v1.2.1**
 
+- `easy imageRemBg` 增加 **inspyrenet** 选项
 - 增加 `easy controlnetLoader++`
 - `easy ipadapterApply` 和 `easy ipadapterApplyADV` 增加 **PLUS (kolors genernal)** 预置项 (支持kolors IPA，可能会改名）
 - 去除 `easy positive` `easy negative` 等prompt节点的自动将中文翻译功能，自动翻译仅在 `easy a1111Loader` 等不支持中文TE的加载器中生效
@@ -72,7 +73,7 @@ git clone https://github.com/yolain/ComfyUI-Easy-Use
 **v1.2.0**
 
 - 增加 `easy pulIDApply` 和 `easy pulIDApplyADV`
-- 增加 `easy huanyuanDiTLoader` 和 `easy pixArtLoader`
+- 增加 `easy hunyuanDiTLoader` 和 `easy pixArtLoader`
 - 当新菜单的位置在上或者下时增加上 crystools 的显示，推荐开两个就好（如果后续crystools有更新UI适配我可能会删除掉）
 - 增加 **easy sliderControl** - 滑块控制节点，当前可用于控制ipadapterMS的参数 (双击滑块可重置为默认值)
 - 增加 **layer_weights** 属性在 `easy ipadapterApplyADV` 节点

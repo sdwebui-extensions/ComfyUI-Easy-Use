@@ -8,13 +8,11 @@ from comfy.model_patcher import ModelPatcher
 from nodes import NODE_CLASS_MAPPINGS
 from collections import defaultdict
 from .log import log_node_info, log_node_error
-from ..kolors.model_patch import add_model_patch
-from ..dit.hunyuanDiT.loader import EXM_HyDiT_Tenc_Temp, load_hydit
 from ..dit.pixArt.loader import load_pixart
 
-stable_diffusion_loaders = ["easy fullLoader", "easy a1111Loader", "easy comfyLoader", "easy zero123Loader", "easy svdLoader"]
+stable_diffusion_loaders = ["easy fullLoader", "easy a1111Loader", "easy comfyLoader", "easy hunyuanDiTLoader","easy zero123Loader", "easy svdLoader"]
 stable_cascade_loaders = ["easy cascadeLoader"]
-dit_loaders = ['easy hunyuanDiTLoader', 'easy pixArtLoader']
+dit_loaders = ['easy pixArtLoader']
 controlnet_loaders = ["easy controlnetLoader", "easy controlnetLoaderADV"]
 instant_loaders = ["easy instantIDApply", "easy instantIDApplyADV"]
 cascade_vae_node = ["easy preSamplingCascade", "easy fullCascadeKSampler"]
@@ -291,14 +289,14 @@ class easyLoader:
                 cn_adv_cls = NODE_CLASS_MAPPINGS['ControlNetLoaderAdvanced']
                 control_net, = cn_adv_cls().load_controlnet(control_net_name, timestep_keyframe)
             else:
-                raise Exception(
-                    f"[Advanced-ControlNet Not Found] you need to install 'COMFYUI-Advanced-ControlNet'")
+                raise Exception(f"[Advanced-ControlNet Not Found] you need to install 'COMFYUI-Advanced-ControlNet'")
         else:
             controlnet_path = folder_paths.get_full_path("controlnet", control_net_name)
             control_net = comfy.controlnet.load_controlnet(controlnet_path)
         if use_cache:
             self.add_to_cache("controlnet", unique_id, control_net)
             self.eviction_based_on_memory()
+
         return control_net
     def load_clip(self, clip_name, type='stable_diffusion', load_clip=None):
         if clip_name in self.loaded_objects["clip"]:
@@ -492,8 +490,6 @@ class easyLoader:
                 if model is None:
                     raise RuntimeError("ERROR: Could not detect model type of: {}".format(unet_path))
 
-                add_model_patch(model, sd)
-
                 self.add_to_cache("unet", unet_name, model)
                 self.eviction_based_on_memory()
 
@@ -518,12 +514,8 @@ class easyLoader:
             return self.loaded_objects["ckpt"][ckpt_name+'_'+model_name][0]
         model = None
         ckpt_path = folder_paths.get_full_path("checkpoints", ckpt_name)
-        model_type = kwargs['model_type'] if "model_type" in kwargs else 'HyDiT'
-        if model_type == 'HyDiT':
-            hydit_conf = kwargs['hydit_conf']
-            model_conf = hydit_conf[model_name]
-            model = load_hydit(ckpt_path, model_conf)
-        elif model_type == 'PixArt':
+        model_type = kwargs['model_type'] if "model_type" in kwargs else 'PixArt'
+        if model_type == 'PixArt':
             pixart_conf = kwargs['pixart_conf']
             model_conf = pixart_conf[model_name]
             model = load_pixart(ckpt_path, model_conf)
@@ -537,10 +529,6 @@ class easyLoader:
         if clip_name in self.loaded_objects["clip"]:
             return self.loaded_objects["clip"][clip_name][0]
 
-        model_type = kwargs['model_type'] if "model_type" in kwargs else 'HyDiT'
-        if model_type == 'HyDiT':
-            del kwargs['model_type']
-            model = EXM_HyDiT_Tenc_Temp(model_class="clip", **kwargs)
         clip_path = folder_paths.get_full_path("clip", clip_name)
         sd = comfy.utils.load_torch_file(clip_path)
 

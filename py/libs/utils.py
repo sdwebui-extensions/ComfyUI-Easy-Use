@@ -105,6 +105,8 @@ def get_sd_version(model):
     model_config: comfy.supported_models.supported_models_base.BASE = base.model_config
     if isinstance(model_config, comfy.supported_models.SDXL):
         return 'sdxl'
+    elif isinstance(model_config, comfy.supported_models.SDXLRefiner):
+        return 'sdxl_refiner'
     elif isinstance(
             model_config, (comfy.supported_models.SD15, comfy.supported_models.SD20)
     ):
@@ -115,8 +117,8 @@ def get_sd_version(model):
         return 'svd'
     elif isinstance(model_config, comfy.supported_models.SD3):
         return 'sd3'
-    elif isinstance(model_config, comfy.supported_models.Kolors):
-        return 'kolors'
+    elif isinstance(model_config, comfy.supported_models.HunyuanDiT):
+        return 'hydit'
     else:
         return 'unknown'
 
