@@ -93,7 +93,10 @@ def translate(text):
     global zh_en_model_path, zh_en_model, zh_en_tokenizer
 
     if not os.path.exists(zh_en_model_path):
-        zh_en_model_path = 'Helsinki-NLP/opus-mt-zh-en'
+        if os.path.exists('/stable-diffusion-cache/models/opus-mt-zh-en'):
+            zh_en_model_path = '/stable-diffusion-cache/models/opus-mt-zh-en'
+        else:
+            zh_en_model_path = 'Helsinki-NLP/opus-mt-zh-en'
 
     print(zh_en_model_path)
     if zh_en_model is None:
@@ -210,7 +213,10 @@ def zh_to_en(text):
     install_package('sentencepiece', '0.2.0')
 
     if not os.path.exists(zh_en_model_path):
-        zh_en_model_path = 'Helsinki-NLP/opus-mt-zh-en'
+        if os.path.exists('/stable-diffusion-cache/models/opus-mt-zh-en'):
+            zh_en_model_path = '/stable-diffusion-cache/models/opus-mt-zh-en'
+        else:
+            zh_en_model_path = 'Helsinki-NLP/opus-mt-zh-en'
 
     if zh_en_model is None:
         zh_en_model = AutoModelForSeq2SeqLM.from_pretrained(zh_en_model_path).eval()

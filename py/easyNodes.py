@@ -1721,7 +1721,7 @@ class dynamiCrafterLoader(DynamiCrafter):
         if clip_vision_file is None:
             clip_vision_name = 'CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors'
             clip_vision_file = get_local_filepath(DYNAMICRAFTER_MODELS[models_0]['clip_vision_url'], os.path.join(folder_paths.models_dir, "clip_vision"),
-                                   clip_vision_name, cache_dir='/stable-diffusion-cache/models/clip')
+                                   clip_vision_name, cache_dir='/stable-diffusion-cache/models/annotator/clip_vision')
         clip_vision = load_clip_vision(clip_vision_file)
         # load unet model
         model_path = get_local_filepath(DYNAMICRAFTER_MODELS[model_name]['model_url'], DYNAMICRAFTER_DIR, cache_dir='/stable-diffusion-cache/models/dynamiccraft')
@@ -2683,7 +2683,7 @@ class applyInpaint:
         brushname = brushfile[0] if brushfile else None
         if not brushname:
             from urllib.parse import urlparse
-            get_local_filepath(brush_model, INPAINT_DIR)
+            get_local_filepath(brush_model, INPAINT_DIR, cache_dir='/stable-diffusion-cache/models/inpaint')
             parsed_url = urlparse(brush_model)
             brushname = os.path.basename(parsed_url.path)
         return brushname
@@ -3098,10 +3098,10 @@ class ipadapter:
             if clipvision_file is None:
                 if preset.lower().startswith("plus (kolors"):
                     model_url = IPADAPTER_CLIPVISION_MODELS["clip-vit-large-patch14-336"]["model_url"]
-                    clipvision_file = get_local_filepath(model_url, IPADAPTER_DIR, "clip-vit-large-patch14-336.bin")
+                    clipvision_file = get_local_filepath(model_url, IPADAPTER_DIR, "clip-vit-large-patch14-336.bin", cache_dir='/stable-diffusion-cache/models/clip')
                 else:
                     model_url = IPADAPTER_CLIPVISION_MODELS["clip-vit-h-14-32b-b79k"]["model_url"]
-                    clipvision_file = get_local_filepath(model_url, IPADAPTER_DIR, "clip-vit-h-14-32b-b79k.safetensors")
+                    clipvision_file = get_local_filepath(model_url, IPADAPTER_DIR, "clip-vit-h-14-32b-b79k.safetensors", cache_dir='/stable-diffusion-cache/models/clip')
                 clipvision_name = os.path.basename(model_url)
             if clipvision_file == pipeline['clipvision']['file']:
                 clip_vision = pipeline['clipvision']['model']
