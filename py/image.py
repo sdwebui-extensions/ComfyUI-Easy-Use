@@ -7,18 +7,19 @@ import comfy.utils
 import comfy.model_management
 from comfy_extras.nodes_compositing import JoinImageWithAlpha
 from server import PromptServer
-from nodes import MAX_RESOLUTION
-from PIL import Image, ImageDraw, ImageFilter
+from nodes import MAX_RESOLUTION, NODE_CLASS_MAPPINGS as ALL_NODE_CLASS_MAPPINGS
+from PIL import Image, ImageDraw, ImageFilter, ImageOps
 from torchvision.transforms import Resize, CenterCrop, GaussianBlur
 from torchvision.transforms.functional import to_pil_image
 from .libs.log import log_node_info
-from .libs.utils import AlwaysEqualProxy
+from .libs.utils import AlwaysEqualProxy, ByPassTypeTuple
+from .libs.cache import cache, update_cache, remove_cache
 from .libs.image import pil2tensor, tensor2pil, ResizeMode, get_new_bounds, RGB2RGBA, image2mask
 from .libs.colorfix import adain_color_fix, wavelet_color_fix
 from .libs.chooser import ChooserMessage, ChooserCancelled
 from .config import REMBG_DIR, REMBG_MODELS, HUMANPARSING_MODELS, MEDIAPIPE_MODELS, MEDIAPIPE_DIR
 
-
+any_type = AlwaysEqualProxy("*")
 # 图像数量
 class imageCount:
   @classmethod
@@ -318,6 +319,30 @@ class imageScaleDownToSize(imageScaleDownBy):
     scale_by = min(scale_by, 1.0)
     return self.image_scale_down_by(images, scale_by)
 
+class imageScaleToNormPixels:
+  upscale_methods = ["nearest-exact", "bilinear", "area", "bicubic", "lanczos"]
+  @classmethod
+  def INPUT_TYPES(s):
+    return {
+      "required": {
+        "image": ("IMAGE",),
+        "upscale_method": (s.upscale_methods,),
+        "scale_by": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 8.0, "step": 0.01}),
+      }
+    }
+
+  RETURN_TYPES = ("IMAGE",)
+  RETURN_NAMES = ("image",)
+  FUNCTION = "scale"
+  CATEGORY = "EasyUse/Image"
+
+  def scale(self, image, upscale_method, scale_by):
+    height, width = image.shape[1:3]
+    width = int(width * scale_by - width * scale_by % 8)
+    height = int(height * scale_by - height * scale_by % 8)
+    upscale_image_cls = ALL_NODE_CLASS_MAPPINGS['ImageScale']
+    image, = upscale_image_cls().upscale(image, upscale_method, width, height, "disabled")
+    return (image,)
 
 # 图像比率
 class imageRatio:
@@ -404,46 +429,6 @@ class imagePixelPerfect:
 
     return {"ui": {"text": text}, "result": (result,)}
 
-# 图片到遮罩
-class imageToMask:
-  @classmethod
-  def INPUT_TYPES(s):
-    return {"required": {
-        "image": ("IMAGE",),
-        "channel": (['red', 'green', 'blue'],),
-       }
-    }
-
-  RETURN_TYPES = ("MASK",)
-  FUNCTION = "convert"
-  CATEGORY = "EasyUse/Image"
-
-  def convert_to_single_channel(self, image, channel='red'):
-    # Convert to RGB mode to access individual channels
-    image = image.convert('RGB')
-
-    # Extract the desired channel and convert to greyscale
-    if channel == 'red':
-      channel_img = image.split()[0].convert('L')
-    elif channel == 'green':
-      channel_img = image.split()[1].convert('L')
-    elif channel == 'blue':
-      channel_img = image.split()[2].convert('L')
-    else:
-      raise ValueError(
-        "Invalid channel option. Please choose 'red', 'green', or 'blue'.")
-
-    # Convert the greyscale channel back to RGB mode
-    channel_img = Image.merge(
-      'RGB', (channel_img, channel_img, channel_img))
-
-    return channel_img
-
-  def convert(self, image, channel='red'):
-    image = self.convert_to_single_channel(tensor2pil(image), channel)
-    image = pil2tensor(image)
-    return (image.squeeze().mean(2),)
-
 # 图像保存 (简易)
 from nodes import PreviewImage, SaveImage
 class imageSaveSimple:
@@ -476,7 +461,6 @@ class imageSaveSimple:
       return ()
     else:
       return SaveImage().save_images(images, filename_prefix, prompt, extra_pnginfo)
-
 
 # 图像批次合并
 class JoinImageBatch:
@@ -619,6 +603,65 @@ class imageSplitGrid:
 
     return (torch.cat(new_images, dim=0),)
 
+class imageSplitTiles:
+
+  @classmethod
+  def INPUT_TYPES(s):
+    return {
+      "required": {
+        "image": ("IMAGE",),
+        "overlap_ratio": ("FLOAT", {"default": 0, "min": 0, "max": 0.5, "step": 0.01, }),
+        "overlap_offset": ("INT", {"default": 0, "min": - MAX_RESOLUTION // 2, "max": MAX_RESOLUTION // 2, "step": 1, }),
+        "tiles_num": ("INT", {"default": 2, "min": 2, "max": 50, "step": 1}),
+      },
+      "optional": {
+        "norm": ("BOOLEAN", {"default": True}),
+      }
+    }
+
+  RETURN_TYPES = ("IMAGE", "MASK", "INT", "INT")
+  RETURN_NAMES = ("tiles", "masks", "overlap_x", "overlap_y")
+  FUNCTION = "doit"
+  CATEGORY = "EasyUse/Image"
+
+  def doit(self, image, overlap_ratio, overlap_offset, tiles_num, norm=True):
+    height, width = image.shape[1:3]
+
+    is_landscape = width >= height
+
+    tite_w = width // tiles_num
+    tile_h = height // tiles_num
+    overlap = int(tite_w * overlap_ratio) + overlap_offset  if is_landscape else int(tile_h * overlap_ratio) + overlap_offset
+    overlap_w = tite_w + overlap if is_landscape else width
+    overlap_h = height if is_landscape else tile_h + overlap
+    if norm:
+      overlap_w = int(overlap_w - overlap_w % 8)
+      overlap_h = int(overlap_h - overlap_h % 8)
+    else:
+      overlap_w = int(overlap_w)
+      overlap_h = int(overlap_h)
+    cls = ALL_NODE_CLASS_MAPPINGS['ImageCrop']
+    solid_mask_cls = ALL_NODE_CLASS_MAPPINGS['SolidMask']
+    feather_mask_cls = ALL_NODE_CLASS_MAPPINGS['FeatherMask']
+
+    overlap_x = int((width - overlap_w) / (tiles_num - 1)) if is_landscape else 0
+    overlap_y = 0 if is_landscape else int((height - overlap_h) / (tiles_num - 1))
+
+    tiles, masks = [], []
+    for i in range(tiles_num):
+      tile, = cls().crop(image, overlap_w, overlap_h, int(overlap_x * i), int(overlap_y * i))
+      tiles.append(tile)
+      fearing_left = int(overlap) if overlap_x * i > 0 else 0
+      fearing_top = int(overlap) if overlap_y * i > 0 else 0
+      mask, = solid_mask_cls().solid(1, overlap_w, overlap_h)
+      mask, = feather_mask_cls().feather(mask, fearing_left, fearing_top, 0, 0)
+      masks.append(mask)
+
+    tiles = torch.cat(tiles, dim=0)
+    masks = torch.cat(masks, dim=0)
+
+    return (tiles, masks, overlap_x, overlap_y)
+
 class imagesSplitImage:
     @classmethod
     def INPUT_TYPES(s):
@@ -636,7 +679,6 @@ class imagesSplitImage:
     def split(self, images,):
       new_images = torch.chunk(images, len(images), dim=0)
       return new_images
-
 
 class imageConcat:
   @classmethod
@@ -1007,12 +1049,12 @@ class imageInterrogator:
     RETURN_NAMES = ("prompt",)
     FUNCTION = "interrogate"
     CATEGORY = "EasyUse/Image"
-    OUTPUT_NODE = True
+    OUTPUT_NODE = False
     OUTPUT_IS_LIST = (True,)
 
     def interrogate(self, image, mode, use_lowvram=False):
       prompt = ci.image_to_prompt(image, mode, low_vram=use_lowvram)
-      return {"ui":{"text":prompt},"result":(prompt,)}
+      return (prompt,)
 
 # 人类分割器
 class humanSegmentation:
@@ -1023,7 +1065,7 @@ class humanSegmentation:
         return {
           "required":{
             "image": ("IMAGE",),
-            "method": (["selfie_multiclass_256x256", "human_parsing_lip"],),
+            "method": (["selfie_multiclass_256x256", "human_parsing_lip", "human_parts (deeplabv3p)"],),
             "confidence": ("FLOAT", {"default": 0.4, "min": 0.05, "max": 0.95, "step": 0.01},),
             "crop_multi": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 10.0, "step": 0.001},),
           },
@@ -1151,13 +1193,26 @@ class humanSegmentation:
 
         output_image, = JoinImageWithAlpha().join_image_with_alpha(image, alpha)
 
+      elif method == "human_parts (deeplabv3p)":
+        from .human_parsing.run_parsing import HumanParts
+        onnx_path = os.path.join(folder_paths.models_dir, 'onnx')
+        human_parts_path = os.path.join(onnx_path, 'human-parts')
+        model_path = get_local_filepath(HUMANPARSING_MODELS['human-parts']['model_url'], human_parts_path)
+        parsing = HumanParts(model_path=model_path)
+
+        mask, = parsing(image, mask_components)
+
+        alpha = 1.0 - mask
+
+        output_image, = JoinImageWithAlpha().join_image_with_alpha(image, alpha)
+
+
       # use crop
       bbox = [[0, 0, 0, 0]]
       if crop_multi > 0.0:
         output_image, mask, bbox = imageCropFromMask().crop(output_image, mask, crop_multi, crop_multi, 1.0)
 
       return (output_image, mask, bbox)
-
 
 class imageCropFromMask:
     @classmethod
@@ -1488,7 +1543,7 @@ class removeLocalImage:
   def INPUT_TYPES(s):
       return {
         "required": {
-          "any": (AlwaysEqualProxy("*"),),
+          "any": (any_type,),
           "file_name": ("STRING",{"default":""}),
         },
       }
@@ -1524,7 +1579,83 @@ class removeLocalImage:
       PromptServer.instance.send_sync("easyuse-toast", {"content": "Removed Failed", "type": 'error'})
     return ()
 
+try:
+    from comfy_execution.graph_utils import GraphBuilder, is_link
+except:
+    GraphBuilder = None
+class loadImagesForLoop:
+  @classmethod
+  def INPUT_TYPES(s):
+    return {
+      "required": {
+        "directory": ("STRING", {"default": ""}),
+      },
+      "optional": {
+        "start_index": ("INT", {"default": 0, "min": 0, "step": 1}),
+        "limit": ("INT", {"default":-1, "min":-1, "max": 10000}),
+        "initial_value1": (any_type,),
+        "initial_value2": (any_type,),
+      },
+      "hidden": {
+        "initial_value0": (any_type,),
+        "prompt": "PROMPT",
+        "extra_pnginfo": "EXTRA_PNGINFO",
+        "unique_id": "UNIQUE_ID"
+      }
+    }
 
+  RETURN_TYPES = ByPassTypeTuple(tuple(["FLOW_CONTROL", "INT", "IMAGE", "MASK", "STRING", any_type, any_type]))
+  RETURN_NAMES = ByPassTypeTuple(tuple(["flow", "index", "image", "mask", "name", "value1", "value2"]))
+
+  FUNCTION = "load_images"
+
+  CATEGORY = "image"
+
+  def load_images(self, directory: str, start_index: int = 0, limit: int =-1, prompt=None, extra_pnginfo=None, unique_id=None, **kwargs):
+    if not os.path.isdir(directory):
+      raise FileNotFoundError(f"Directory '{directory}' cannot be found.")
+    dir_files = os.listdir(directory)
+    if len(dir_files) == 0:
+      raise FileNotFoundError(f"No files in directory '{directory}'.")
+
+    # Filter files by extension
+    valid_extensions = ['.jpg', '.jpeg', '.png', '.webp']
+    dir_files = [f for f in dir_files if any(f.lower().endswith(ext) for ext in valid_extensions)]
+
+    dir_files = sorted(dir_files)
+    dir_files = [os.path.join(directory, x) for x in dir_files]
+
+    graph = GraphBuilder()
+    index = 0
+    total = len(dir_files) if limit == -1 else limit
+    unique_id = unique_id.split('.')[len(unique_id.split('.')) - 1] if "." in unique_id else unique_id
+    update_cache('forloop' + str(unique_id), 'forloop', total)
+    if "initial_value0" in kwargs:
+      index = kwargs["initial_value0"]
+    # start at start_index
+    image_path = dir_files[start_index+index]
+
+    name = os.path.splitext(os.path.basename(image_path))[0]
+
+    i = Image.open(image_path)
+    i = ImageOps.exif_transpose(i)
+    image = i.convert("RGB")
+    image = np.array(image).astype(np.float32) / 255.0
+    image = torch.from_numpy(image)[None,]
+
+    if 'A' in i.getbands():
+      mask = np.array(i.getchannel('A')).astype(np.float32) / 255.0
+      mask = 1. - torch.from_numpy(mask)
+    else:
+      mask = torch.zeros((64, 64), dtype=torch.float32, device="cpu")
+
+    while_open = graph.node("easy whileLoopStart", condition=total, initial_value0=index, initial_value1=kwargs.get('initial_value1',None), initial_value2=kwargs.get('initial_value2',None))
+    outputs = [kwargs.get('initial_value1',None), kwargs.get('initial_value2',None)]
+
+    return {
+      "result": tuple(["stub", index, image, mask, name] + outputs),
+      "expand": graph.finalize(),
+    }
 # 姿势编辑器
 # class poseEditor:
 #   @classmethod
@@ -1577,14 +1708,15 @@ NODE_CLASS_MAPPINGS = {
   "easy imageScaleDown": imageScaleDown,
   "easy imageScaleDownBy": imageScaleDownBy,
   "easy imageScaleDownToSize": imageScaleDownToSize,
+  "easy imageScaleToNormPixels": imageScaleToNormPixels,
   "easy imageRatio": imageRatio,
-  "easy imageToMask": imageToMask,
   "easy imageConcat": imageConcat,
   "easy imageListToImageBatch": imageListToImageBatch,
   "easy imageBatchToImageList": imageBatchToImageList,
   "easy imageSplitList": imageSplitList,
   "easy imageSplitGrid": imageSplitGrid,
   "easy imagesSplitImage": imagesSplitImage,
+  "easy imageSplitTiles": imageSplitTiles,
   "easy imageCropFromMask": imageCropFromMask,
   "easy imageUncropFromBBOX": imageUncropFromBBOX,
   "easy imageSave": imageSaveSimple,
@@ -1598,6 +1730,7 @@ NODE_CLASS_MAPPINGS = {
   "easy joinImageBatch": JoinImageBatch,
   "easy humanSegmentation": humanSegmentation,
   "easy removeLocalImage": removeLocalImage,
+  "easy loadImagesForLoop": loadImagesForLoop,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1610,18 +1743,19 @@ NODE_DISPLAY_NAME_MAPPINGS = {
   "easy imageScaleDown": "Image Scale Down",
   "easy imageScaleDownBy": "Image Scale Down By",
   "easy imageScaleDownToSize": "Image Scale Down To Size",
+  "easy imageScaleToNormPixels": "ImageScaleToNormPixels",
   "easy imageRatio": "ImageRatio",
-  "easy imageToMask": "ImageToMask",
   "easy imageHSVMask": "ImageHSVMask",
   "easy imageConcat": "imageConcat",
   "easy imageListToImageBatch": "Image List To Image Batch",
   "easy imageBatchToImageList": "Image Batch To Image List",
   "easy imageSplitList": "imageSplitList",
   "easy imageSplitGrid": "imageSplitGrid",
+  "easy imageSplitTiles": "imageSplitTiles",
   "easy imagesSplitImage": "imagesSplitImage",
   "easy imageCropFromMask": "imageCropFromMask",
   "easy imageUncropFromBBOX": "imageUncropFromBBOX",
-  "easy imageSave": "SaveImage (Simple)",
+  "easy imageSave": "Save Image (Simple)",
   "easy imageRemBg": "Image Remove Bg",
   "easy imageChooser": "Image Chooser",
   "easy imageColorMatch": "Image Color Match",
@@ -1632,4 +1766,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
   "easy imageToBase64": "Image To Base64",
   "easy humanSegmentation": "Human Segmentation",
   "easy removeLocalImage": "Remove Local Image",
+  "easy loadImagesForLoop": "Load Images For Loop",
 }
