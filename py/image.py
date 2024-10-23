@@ -1,4 +1,5 @@
 import os
+import json
 import hashlib
 import folder_paths
 import torch
@@ -9,6 +10,7 @@ from comfy_extras.nodes_compositing import JoinImageWithAlpha
 from server import PromptServer
 from nodes import MAX_RESOLUTION, NODE_CLASS_MAPPINGS as ALL_NODE_CLASS_MAPPINGS
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
+from PIL.PngImagePlugin import PngInfo
 from torchvision.transforms import Resize, CenterCrop, GaussianBlur
 from torchvision.transforms.functional import to_pil_image
 from .libs.log import log_node_info
@@ -1627,7 +1629,11 @@ class loadImagesForLoop:
 
     graph = GraphBuilder()
     index = 0
-    total = len(dir_files) if limit == -1 else limit
+    if limit == -1:
+      files_length = len(dir_files)
+      total = files_length - start_index if start_index > 0 else files_length
+    else:
+      total = limit
     unique_id = unique_id.split('.')[len(unique_id.split('.')) - 1] if "." in unique_id else unique_id
     update_cache('forloop' + str(unique_id), 'forloop', total)
     if "initial_value0" in kwargs:
@@ -1698,6 +1704,84 @@ class loadImagesForLoop:
 #       m.update(f.read())
 #     return m.digest().hex()
 
+class saveImageLazy():
+  def __init__(self):
+    self.output_dir = folder_paths.get_output_directory()
+    self.type = "output"
+    self.compress_level = 4
+
+  @classmethod
+  def INPUT_TYPES(s):
+    return {"required":
+          {"images": ("IMAGE",),
+           "filename_prefix": ("STRING", {"default": "ComfyUI"}),
+           "save_metadata": ("BOOLEAN", {"default": True}),
+           },
+        "optional":{},
+        "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
+      }
+
+  RETURN_TYPES = ("IMAGE",)
+  RETURN_NAMES = ("images",)
+  OUTPUT_NODE = False
+  FUNCTION = "save"
+  CATEGORY = "EasyUse/Image"
+
+  def save(self, images, filename_prefix, save_metadata, prompt=None, extra_pnginfo=None):
+    extension = 'png'
+
+    full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(
+      filename_prefix, self.output_dir, images[0].shape[1], images[0].shape[0])
+
+    results = list()
+    for (batch_number, image) in enumerate(images):
+      i = 255. * image.cpu().numpy()
+      img = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
+      metadata = None
+
+      filename_with_batch_num = filename.replace(
+        "%batch_num%", str(batch_number))
+
+      counter = 1
+
+      if os.path.exists(full_output_folder) and os.listdir(full_output_folder):
+        filtered_filenames = list(filter(
+          lambda filename: filename.startswith(
+            filename_with_batch_num + "_")
+                           and filename[len(filename_with_batch_num) + 1:-4].isdigit(),
+          os.listdir(full_output_folder)
+        ))
+
+        if filtered_filenames:
+          max_counter = max(
+            int(filename[len(filename_with_batch_num) + 1:-4])
+            for filename in filtered_filenames
+          )
+          counter = max_counter + 1
+
+      file = f"{filename_with_batch_num}_{counter:05}.{extension}"
+
+      save_path = os.path.join(full_output_folder, file)
+
+      if save_metadata:
+        metadata = PngInfo()
+        if prompt is not None:
+          metadata.add_text("prompt", json.dumps(prompt))
+        if extra_pnginfo is not None:
+          for x in extra_pnginfo:
+            metadata.add_text(
+              x, json.dumps(extra_pnginfo[x]))
+
+      img.save(save_path, pnginfo=metadata)
+
+      results.append({
+        "filename": file,
+        "subfolder": subfolder,
+        "type": self.type
+      })
+
+    return {"ui": {"images": results} , "result": (images,)}
+
 NODE_CLASS_MAPPINGS = {
   "easy imageInsetCrop": imageInsetCrop,
   "easy imageCount": imageCount,
@@ -1725,12 +1809,13 @@ NODE_CLASS_MAPPINGS = {
   "easy imageColorMatch": imageColorMatch,
   "easy imageDetailTransfer": imageDetailTransfer,
   "easy imageInterrogator": imageInterrogator,
+  "easy loadImagesForLoop": loadImagesForLoop,
   "easy loadImageBase64": loadImageBase64,
   "easy imageToBase64": imageToBase64,
   "easy joinImageBatch": JoinImageBatch,
   "easy humanSegmentation": humanSegmentation,
   "easy removeLocalImage": removeLocalImage,
-  "easy loadImagesForLoop": loadImagesForLoop,
+  "easy saveImageLazy": saveImageLazy,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1763,8 +1848,9 @@ NODE_DISPLAY_NAME_MAPPINGS = {
   "easy imageInterrogator": "Image To Prompt",
   "easy joinImageBatch": "JoinImageBatch",
   "easy loadImageBase64": "Load Image (Base64)",
+  "easy loadImagesForLoop": "Load Images For Loop",
   "easy imageToBase64": "Image To Base64",
   "easy humanSegmentation": "Human Segmentation",
   "easy removeLocalImage": "Remove Local Image",
-  "easy loadImagesForLoop": "Load Images For Loop",
+  "easy saveImageLazy": "Save Image (Lazy)",
 }

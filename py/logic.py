@@ -649,10 +649,10 @@ class whileLoopStart:
             },
         }
         for i in range(MAX_FLOW_NUM):
-            inputs["optional"]["initial_value%d" % i] = ("*",)
+            inputs["optional"]["initial_value%d" % i] = (any_type,)
         return inputs
 
-    RETURN_TYPES = ByPassTypeTuple(tuple(["FLOW_CONTROL"] + ["*"] * MAX_FLOW_NUM))
+    RETURN_TYPES = ByPassTypeTuple(tuple(["FLOW_CONTROL"] + [any_type] * MAX_FLOW_NUM))
     RETURN_NAMES = ByPassTypeTuple(tuple(["flow"] + ["value%d" % i for i in range(MAX_FLOW_NUM)]))
     FUNCTION = "while_loop_open"
 
@@ -684,10 +684,10 @@ class whileLoopEnd:
             }
         }
         for i in range(MAX_FLOW_NUM):
-            inputs["optional"]["initial_value%d" % i] = (AlwaysEqualProxy('*'),)
+            inputs["optional"]["initial_value%d" % i] = (any_type,)
         return inputs
 
-    RETURN_TYPES = ByPassTypeTuple(tuple([AlwaysEqualProxy('*')] * MAX_FLOW_NUM))
+    RETURN_TYPES = ByPassTypeTuple(tuple([any_type] * MAX_FLOW_NUM))
     RETURN_NAMES = ByPassTypeTuple(tuple(["value%d" % i for i in range(MAX_FLOW_NUM)]))
     FUNCTION = "while_loop_close"
 
@@ -1057,8 +1057,8 @@ class pixels:
 
         width = width * scale
         height = height * scale
-        width_norm = width - width % 8
-        height_norm = height - height % 8
+        width_norm = int(width - width % 8)
+        height_norm = int(height - height % 8)
         flip_wh = kwargs['flip_w/h']
         if flip_wh:
             width, height = height, width
@@ -1142,7 +1142,23 @@ class batchAnything:
     FUNCTION = "batch"
     CATEGORY = "EasyUse/Logic"
 
+    def latentBatch(self, any_1, any_2):
+        samples_out = any_1.copy()
+        s1 = any_1["samples"]
+        s2 = any_2["samples"]
+
+        if s1.shape[1:] != s2.shape[1:]:
+            s2 = comfy.utils.common_upscale(s2, s1.shape[3], s1.shape[2], "bilinear", "center")
+        s = torch.cat((s1, s2), dim=0)
+        samples_out["samples"] = s
+        samples_out["batch_index"] = any_1.get("batch_index",
+                                               [x for x in range(0, s1.shape[0])]) + any_2.get(
+            "batch_index", [x for x in range(0, s2.shape[0])])
+
+        return samples_out
+
     def batch(self, any_1, any_2):
+
         if isinstance(any_1, torch.Tensor) or isinstance(any_2, torch.Tensor):
             if any_1 is None:
                 return (any_2,)
@@ -1164,6 +1180,16 @@ class batchAnything:
             elif isinstance(any_1, tuple):
                 return (any_1 + (any_2,),)
             return ((any_2, any_1),)
+        elif isinstance(any_1, dict) and 'samples' in any_1:
+            if any_2 is None:
+                return (any_1,)
+            elif isinstance(any_2, dict) and 'samples' in any_2:
+                return (self.latentBatch(any_1, any_2),)
+        elif isinstance(any_2, dict) and 'samples' in any_2:
+            if any_1 is None:
+                return (any_2,)
+            elif isinstance(any_1, dict) and 'samples' in any_1:
+                return (self.latentBatch(any_2, any_1),)
         else:
             if any_1 is None:
                 return (any_2,)
@@ -1239,8 +1265,10 @@ class showAnything:
             node = next((x for x in workflow["nodes"] if str(x["id"]) == unique_id[0]), None)
             if node:
                 node["widgets_values"] = [values]
-
-        return {"ui": {"text": values}, "result": (values,), }
+        if isinstance(values, list) and len(values) == 1:
+            return {"ui": {"text": values}, "result": (values[0],), }
+        else:
+            return {"ui": {"text": values}, "result": (values,), }
 
 class showAnythingLazy(showAnything):
     @classmethod
@@ -1253,6 +1281,7 @@ class showAnythingLazy(showAnything):
     RETURN_NAMES = ('output',)
     INPUT_IS_LIST = True
     OUTPUT_NODE = False
+    OUTPUT_IS_LIST = (False,)
     FUNCTION = "log_input"
     CATEGORY = "EasyUse/Logic"
 
