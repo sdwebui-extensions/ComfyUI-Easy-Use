@@ -56,8 +56,16 @@ Double-click install.bat to install the required dependencies
 
 ## 📜 Changelog
 
+**v1.2.5**
+
+- Support mochi 
+- Implement reuse of end nodes output in the loop body (e.g: previewImage and showAnything and sth.) 
+
 **v1.2.4**
 
+- Added `easy imageSplitTiles` and `easy imageTilesFromBatch`
+- Support `model_override`,`vae_override`,`clip_override` can be input separately to `easy fullLoader`
+- Added `easy saveImageLazy`
 - Added `easy loadImageForLoop`
 - Added `easy isFileExist`
 - Added `easy saveText`

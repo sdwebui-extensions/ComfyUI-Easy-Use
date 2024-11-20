@@ -13,10 +13,10 @@ from urllib.request import urlopen
 from PIL import Image
 
 from server import PromptServer
-from nodes import MAX_RESOLUTION, LatentFromBatch, RepeatLatentBatch, NODE_CLASS_MAPPINGS as ALL_NODE_CLASS_MAPPINGS, ConditioningSetMask, ConditioningConcat, CLIPTextEncode, VAEEncodeForInpaint, InpaintModelConditioning
+from nodes import MAX_RESOLUTION, LatentFromBatch, RepeatLatentBatch, NODE_CLASS_MAPPINGS as ALL_NODE_CLASS_MAPPINGS, ConditioningSetMask, ConditioningConcat, CLIPTextEncode, VAEEncodeForInpaint, InpaintModelConditioning, ConditioningZeroOut
 from .config import MAX_SEED_NUM, BASE_RESOLUTIONS, RESOURCES_DIR, INPAINT_DIR, FOOOCUS_STYLES_DIR, FOOOCUS_INPAINT_HEAD, FOOOCUS_INPAINT_PATCH, BRUSHNET_MODELS, POWERPAINT_MODELS, IPADAPTER_DIR, IPADAPTER_CLIPVISION_MODELS, IPADAPTER_MODELS, DYNAMICRAFTER_DIR, DYNAMICRAFTER_MODELS, IC_LIGHT_MODELS
 from .layer_diffuse import LayerDiffuse, LayerMethod
-from .xyplot import XYplot_ModelMergeBlocks, XYplot_CFG, XYplot_Lora, XYplot_Checkpoint, XYplot_Denoise, XYplot_Steps, XYplot_PromptSR, XYplot_Positive_Cond, XYplot_Negative_Cond, XYplot_Positive_Cond_List, XYplot_Negative_Cond_List, XYplot_SeedsBatch, XYplot_Control_Net, XYplot_Sampler_Scheduler
+from .xyplot import *
 
 from .libs.log import log_node_info, log_node_error, log_node_warn
 from .libs.adv_encode import advanced_encode
@@ -143,7 +143,7 @@ class stylesPromptSelector:
         styles_dir = FOOOCUS_STYLES_DIR
         for file_name in os.listdir(styles_dir):
             file = os.path.join(styles_dir, file_name)
-            if os.path.isfile(file) and file_name.endswith(".json") and "styles" in file_name.split(".")[0]:
+            if os.path.isfile(file) and file_name.endswith(".json"):
                 styles.append(file_name.split(".")[0])
         return {
             "required": {
@@ -186,7 +186,7 @@ class stylesPromptSelector:
         for index, val in enumerate(values):
             if 'prompt' in all_styles[val]:
                 if "{prompt}" in all_styles[val]['prompt'] and has_prompt == False:
-                    positive_prompt = all_styles[val]['prompt'].format(prompt=positive)
+                    positive_prompt = all_styles[val]['prompt'].replace('{prompt}', positive)
                     has_prompt = True
                 else:
                     positive_prompt += ', ' + all_styles[val]['prompt'].replace(', {prompt}', '').replace('{prompt}', '')
@@ -898,8 +898,8 @@ class fullLoader:
             "batch_size": (
             "INT", {"default": 1, "min": 1, "max": 4096, "tooltip": "The number of latent images in the batch."})
         },
-            "optional": {"model_override": ("MODEL",), "clip_override": ("CLIP",), "vae_override": ("VAE",), "optional_lora_stack": ("LORA_STACK",), "optional_controlnet_stack": ("CONTROL_NET_STACK",), "a1111_prompt_style": ("BOOLEAN", {"default": a1111_prompt_style_default}),},
-            "hidden": {"prompt": "PROMPT", "my_unique_id": "UNIQUE_ID"}
+            "optional": {"model_override": ("MODEL",), "clip_override": ("CLIP",), "vae_override": ("VAE",), "optional_lora_stack": ("LORA_STACK",), "optional_controlnet_stack": ("CONTROL_NET_STACK",), "a1111_prompt_style": ("BOOLEAN", {"default": a1111_prompt_style_default})},
+            "hidden": {"video_length": "INT", "prompt": "PROMPT", "my_unique_id": "UNIQUE_ID"}
         }
 
     RETURN_TYPES = ("PIPE_LINE", "MODEL", "VAE", "CLIP", "CONDITIONING", "CONDITIONING", "LATENT")
@@ -913,7 +913,7 @@ class fullLoader:
                        resolution, empty_latent_width, empty_latent_height,
                        positive, positive_token_normalization, positive_weight_interpretation,
                        negative, negative_token_normalization, negative_weight_interpretation,
-                       batch_size, model_override=None, clip_override=None, vae_override=None, optional_lora_stack=None, optional_controlnet_stack=None, a1111_prompt_style=False, prompt=None,
+                       batch_size, model_override=None, clip_override=None, vae_override=None, optional_lora_stack=None, optional_controlnet_stack=None, a1111_prompt_style=False, video_length=25, prompt=None,
                        my_unique_id=None
                        ):
 
@@ -926,12 +926,14 @@ class fullLoader:
 
         # Create Empty Latent
         model_type = get_sd_version(model)
-        sd3 = True if model_type == "sd3" else False
-        samples = sampler.emptyLatent(resolution, empty_latent_width, empty_latent_height, batch_size, sd3=sd3)
+        samples = sampler.emptyLatent(resolution, empty_latent_width, empty_latent_height, batch_size, model_type=model_type, video_length=video_length)
 
         # Prompt to Conditioning
         positive_embeddings_final, positive_wildcard_prompt, model, clip = prompt_to_cond('positive', model, clip, clip_skip, lora_stack, positive, positive_token_normalization, positive_weight_interpretation, a1111_prompt_style, my_unique_id, prompt, easyCache, model_type=model_type)
         negative_embeddings_final, negative_wildcard_prompt, model, clip = prompt_to_cond('negative', model, clip, clip_skip, lora_stack, negative, negative_token_normalization, negative_weight_interpretation, a1111_prompt_style, my_unique_id, prompt, easyCache, model_type=model_type)
+
+        if negative_embeddings_final is None:
+            negative_embeddings_final, = ConditioningZeroOut().zero_out(positive_embeddings_final)
 
         # Conditioning add controlnet
         if optional_controlnet_stack is not None and len(optional_controlnet_stack) > 0:
@@ -1685,7 +1687,7 @@ class dynamiCrafterLoader(DynamiCrafter):
 
     def get_clip_file(self, node_name):
         clip_list = folder_paths.get_filename_list("clip")
-        pattern = 'sd2-1-open-clip|model\.(safetensors|bin)$'
+        pattern = 'sd2-1-open-clip|model.(safetensors|bin)$'
         clip_files = [e for e in clip_list if re.search(pattern, e, re.IGNORECASE)]
 
         clip_name = clip_files[0] if len(clip_files)>0 else None
@@ -1697,7 +1699,7 @@ class dynamiCrafterLoader(DynamiCrafter):
 
     def get_clipvision_file(self, node_name):
         clipvision_list = folder_paths.get_filename_list("clip_vision")
-        pattern = '(ViT.H.14.*s32B.b79K|ipadapter.*sd15|sd1.?5.*model|open_clip_pytorch_model\.(bin|safetensors))'
+        pattern = '(ViT.H.14.*s32B.b79K|ipadapter.*sd15|sd1.?5.*model|open_clip_pytorch_model.(bin|safetensors))'
         clipvision_files = [e for e in clipvision_list if re.search(pattern, e, re.IGNORECASE)]
 
         clipvision_name = clipvision_files[0] if len(clipvision_files)>0 else None
@@ -1709,7 +1711,7 @@ class dynamiCrafterLoader(DynamiCrafter):
 
     def get_vae_file(self, node_name):
         vae_list = folder_paths.get_filename_list("vae")
-        pattern = 'vae-ft-mse-840000-ema-pruned\.(pt|bin|safetensors)$'
+        pattern = 'vae-ft-mse-840000-ema-pruned.(pt|bin|safetensors)$'
         vae_files = [e for e in vae_list if re.search(pattern, e, re.IGNORECASE)]
 
         vae_name = vae_files[0] if len(vae_files)>0 else None
@@ -2103,6 +2105,52 @@ class pixArtLoader:
         return {"ui": {},
                 "result": (pipe, model, vae, clip, positive_embeddings_final, negative_embeddings_final, samples)}
 
+
+# Mochi加载器
+class mochiLoader(fullLoader):
+    @classmethod
+    def INPUT_TYPES(cls):
+        checkpoints = folder_paths.get_filename_list("checkpoints")
+        return {
+            "required": {
+                "ckpt_name": (checkpoints,),
+                "vae_name": (["Baked VAE"] + folder_paths.get_filename_list("vae"), {"default": "mochi_vae.safetensors"}),
+
+                "positive": ("STRING", {"default":"", "placeholder": "Positive", "multiline": True}),
+                "negative": ("STRING", {"default":"", "placeholder": "Negative", "multiline": True}),
+
+                "resolution": (resolution_strings, {"default": "width x height (custom)"}),
+                "empty_latent_width": ("INT", {"default": 848, "min": 64, "max": MAX_RESOLUTION, "step": 8}),
+                "empty_latent_height": ("INT", {"default": 480, "min": 64, "max": MAX_RESOLUTION, "step": 8}),
+                "length": ("INT", {"default": 25, "min": 7, "max": MAX_RESOLUTION, "step": 6}),
+                "batch_size": ("INT", {"default": 1, "min": 1, "max": 4096, "tooltip": "The number of latent images in the batch."})
+            },
+            "optional": {
+                "model_override": ("MODEL",), "clip_override": ("CLIP",), "vae_override": ("VAE",),
+            },
+            "hidden": {"prompt": "PROMPT", "my_unique_id": "UNIQUE_ID"}
+        }
+
+    RETURN_TYPES = ("PIPE_LINE", "MODEL", "VAE")
+    RETURN_NAMES = ("pipe", "model", "vae")
+
+    FUNCTION = "mochiLoader"
+    CATEGORY = "EasyUse/Loaders"
+
+    def mochiLoader(self, ckpt_name, vae_name,
+                       positive, negative,
+                       resolution, empty_latent_width, empty_latent_height,
+                       length, batch_size, model_override=None, clip_override=None, vae_override=None, optional_lora_stack=None, optional_controlnet_stack=None, a1111_prompt_style=False, prompt=None,
+                       my_unique_id=None):
+
+        return super().adv_pipeloader(ckpt_name, 'Default', vae_name, 0,
+             "None", 1.0, 1.0,
+             resolution, empty_latent_width, empty_latent_height,
+             positive, 'none', 'comfy',
+             negative,'none','comfy',
+             batch_size, model_override, clip_override,  vae_override, a1111_prompt_style=False, video_length=length, prompt=prompt,
+             my_unique_id=my_unique_id
+        )
 # lora
 class loraStack:
     def __init__(self):
@@ -2627,15 +2675,15 @@ class applyInpaint:
         if type == 'brushnet_random':
             brush_model = BRUSHNET_MODELS['random_mask'][model_type]['model_url']
             if model_type == 'sdxl':
-                pattern = 'brushnet.random.mask.sdxl.*\.(safetensors|bin)$'
+                pattern = 'brushnet.random.mask.sdxl.*.(safetensors|bin)$'
             else:
-                pattern = 'brushnet.random.mask.*\.(safetensors|bin)$'
+                pattern = 'brushnet.random.mask.*.(safetensors|bin)$'
         elif type == 'brushnet_segmentation':
             brush_model = BRUSHNET_MODELS['segmentation_mask'][model_type]['model_url']
             if model_type == 'sdxl':
-                pattern = 'brushnet.segmentation.mask.sdxl.*\.(safetensors|bin)$'
+                pattern = 'brushnet.segmentation.mask.sdxl.*.(safetensors|bin)$'
             else:
-                pattern = 'brushnet.segmentation.mask.*\.(safetensors|bin)$'
+                pattern = 'brushnet.segmentation.mask.*.(safetensors|bin)$'
 
 
         brushfile = [e for e in folder_paths.get_filename_list('inpaint') if re.search(pattern, e, re.IGNORECASE)]
@@ -2938,11 +2986,11 @@ class ipadapter:
         clipvision_list = folder_paths.get_filename_list("clip_vision")
 
         if preset.startswith("plus (kolors") or preset.startswith("faceid plus kolors"):
-            pattern = 'Vit.Large.patch14.336\.(bin|safetensors)$'
+            pattern = 'Vit.Large.patch14.336.(bin|safetensors)$'
         elif preset.startswith("vit-g"):
-            pattern = '(ViT.bigG.14.*39B.b160k|ipadapter.*sdxl|sdxl.*model\.(bin|safetensors))'
+            pattern = '(ViT.bigG.14.*39B.b160k|ipadapter.*sdxl|sdxl.*model.(bin|safetensors))'
         else:
-            pattern = '(ViT.H.14.*s32B.b79K|ipadapter.*sd15|sd1.?5.*model\.(bin|safetensors))'
+            pattern = '(ViT.H.14.*s32B.b79K|ipadapter.*sd15|sd1.?5.*model.(bin|safetensors))'
         clipvision_files = [e for e in clipvision_list if re.search(pattern, e, re.IGNORECASE)]
 
         clipvision_name = clipvision_files[0] if len(clipvision_files)>0 else None
@@ -2961,86 +3009,86 @@ class ipadapter:
         if preset.startswith("light"):
             if is_sdxl:
                 raise Exception("light model is not supported for SDXL")
-            pattern = 'sd15.light.v11\.(safetensors|bin)$'
+            pattern = 'sd15.light.v11.(safetensors|bin)$'
             # if light model v11 is not found, try with the old version
             if not [e for e in ipadapter_list if re.search(pattern, e, re.IGNORECASE)]:
-                pattern = 'sd15.light\.(safetensors|bin)$'
+                pattern = 'sd15.light.(safetensors|bin)$'
         elif preset.startswith("standard"):
             if is_sdxl:
-                pattern = 'ip.adapter.sdxl.vit.h\.(safetensors|bin)$'
+                pattern = 'ip.adapter.sdxl.vit.h.(safetensors|bin)$'
             else:
-                pattern = 'ip.adapter.sd15\.(safetensors|bin)$'
+                pattern = 'ip.adapter.sd15.(safetensors|bin)$'
         elif preset.startswith("vit-g"):
             if is_sdxl:
-                pattern = 'ip.adapter.sdxl\.(safetensors|bin)$'
+                pattern = 'ip.adapter.sdxl.(safetensors|bin)$'
             else:
-                pattern = 'sd15.vit.g\.(safetensors|bin)$'
+                pattern = 'sd15.vit.g.(safetensors|bin)$'
         elif preset.startswith("plus (high"):
             if is_sdxl:
-                pattern = 'plus.sdxl.vit.h\.(safetensors|bin)$'
+                pattern = 'plus.sdxl.vit.h.(safetensors|bin)$'
             else:
-                pattern = 'ip.adapter.plus.sd15\.(safetensors|bin)$'
+                pattern = 'ip.adapter.plus.sd15.(safetensors|bin)$'
         elif preset.startswith("plus (kolors"):
             if is_sdxl:
-                pattern = 'plus.gener(nal|al)\.(safetensors|bin)$'
+                pattern = 'plus.gener(nal|al).(safetensors|bin)$'
             else:
                 raise Exception("kolors model is not supported for SD15")
         elif preset.startswith("plus face"):
             if is_sdxl:
-                pattern = 'plus.face.sdxl.vit.h\.(safetensors|bin)$'
+                pattern = 'plus.face.sdxl.vit.h.(safetensors|bin)$'
             else:
-                pattern = 'plus.face.sd15\.(safetensors|bin)$'
+                pattern = 'plus.face.sd15.(safetensors|bin)$'
         elif preset.startswith("full"):
             if is_sdxl:
                 raise Exception("full face model is not supported for SDXL")
-            pattern = 'full.face.sd15\.(safetensors|bin)$'
+            pattern = 'full.face.sd15.(safetensors|bin)$'
         elif preset.startswith("composition"):
             if is_sdxl:
-                pattern = 'plus.composition.sdxl\.(safetensors|bin)$'
+                pattern = 'plus.composition.sdxl.(safetensors|bin)$'
             else:
-                pattern = 'plus.composition.sd15\.(safetensors|bin)$'
+                pattern = 'plus.composition.sd15.(safetensors|bin)$'
         elif preset.startswith("faceid portrait ("):
             if is_sdxl:
-                pattern = 'portrait.sdxl\.(safetensors|bin)$'
+                pattern = 'portrait.sdxl.(safetensors|bin)$'
             else:
-                pattern = 'portrait.v11.sd15\.(safetensors|bin)$'
+                pattern = 'portrait.v11.sd15.(safetensors|bin)$'
                 # if v11 is not found, try with the old version
                 if not [e for e in ipadapter_list if re.search(pattern, e, re.IGNORECASE)]:
-                    pattern = 'portrait.sd15\.(safetensors|bin)$'
+                    pattern = 'portrait.sd15.(safetensors|bin)$'
             is_insightface = True
         elif preset.startswith("faceid portrait unnorm"):
             if is_sdxl:
-                pattern = r'portrait.sdxl.unnorm\.(safetensors|bin)$'
+                pattern = r'portrait.sdxl.unnorm.(safetensors|bin)$'
             else:
                 raise Exception("portrait unnorm model is not supported for SD1.5")
             is_insightface = True
         elif preset == "faceid":
             if is_sdxl:
-                pattern = 'faceid.sdxl\.(safetensors|bin)$'
-                lora_pattern = 'faceid.sdxl.lora\.safetensors$'
+                pattern = 'faceid.sdxl.(safetensors|bin)$'
+                lora_pattern = 'faceid.sdxl.lora.safetensors$'
             else:
-                pattern = 'faceid.sd15\.(safetensors|bin)$'
-                lora_pattern = 'faceid.sd15.lora\.safetensors$'
+                pattern = 'faceid.sd15.(safetensors|bin)$'
+                lora_pattern = 'faceid.sd15.lora.safetensors$'
             is_insightface = True
         elif preset.startswith("faceid plus kolors"):
             if is_sdxl:
-                pattern = '(kolors.ip.adapter.faceid.plus|ipa.faceid.plus)\.(safetensors|bin)$'
+                pattern = '(kolors.ip.adapter.faceid.plus|ipa.faceid.plus).(safetensors|bin)$'
             else:
                 raise Exception("faceid plus kolors model is not supported for SD1.5")
             is_insightface = True
         elif preset.startswith("faceid plus -"):
             if is_sdxl:
                 raise Exception("faceid plus model is not supported for SDXL")
-            pattern = 'faceid.plus.sd15\.(safetensors|bin)$'
-            lora_pattern = 'faceid.plus.sd15.lora\.safetensors$'
+            pattern = 'faceid.plus.sd15.(safetensors|bin)$'
+            lora_pattern = 'faceid.plus.sd15.lora.safetensors$'
             is_insightface = True
         elif preset.startswith("faceid plus v2"):
             if is_sdxl:
-                pattern = 'faceid.plusv2.sdxl\.(safetensors|bin)$'
-                lora_pattern = 'faceid.plusv2.sdxl.lora\.safetensors$'
+                pattern = 'faceid.plusv2.sdxl.(safetensors|bin)$'
+                lora_pattern = 'faceid.plusv2.sdxl.lora.safetensors$'
             else:
-                pattern = 'faceid.plusv2.sd15\.(safetensors|bin)$'
-                lora_pattern = 'faceid.plusv2.sd15.lora\.safetensors$'
+                pattern = 'faceid.plusv2.sd15.(safetensors|bin)$'
+                lora_pattern = 'faceid.plusv2.sd15.lora.safetensors$'
             is_insightface = True
         else:
             raise Exception(f"invalid type '{preset}'")
@@ -3056,16 +3104,16 @@ class ipadapter:
     def get_lora_pattern(self, file):
         basename = os.path.basename(file)
         lora_pattern = None
-        if re.search(r'faceid.sdxl\.(safetensors|bin)$', basename, re.IGNORECASE):
-            lora_pattern = 'faceid.sdxl.lora\.safetensors$'
-        elif re.search(r'faceid.sd15\.(safetensors|bin)$', basename, re.IGNORECASE):
-            lora_pattern = 'faceid.sd15.lora\.safetensors$'
-        elif re.search(r'faceid.plus.sd15\.(safetensors|bin)$', basename, re.IGNORECASE):
-            lora_pattern = 'faceid.plus.sd15.lora\.safetensors$'
-        elif re.search(r'faceid.plusv2.sdxl\.(safetensors|bin)$', basename, re.IGNORECASE):
-            lora_pattern = 'faceid.plusv2.sdxl.lora\.safetensors$'
-        elif re.search(r'faceid.plusv2.sd15\.(safetensors|bin)$', basename, re.IGNORECASE):
-            lora_pattern = 'faceid.plusv2.sd15.lora\.safetensors$'
+        if re.search(r'faceid.sdxl.(safetensors|bin)$', basename, re.IGNORECASE):
+            lora_pattern = 'faceid.sdxl.lora.safetensors$'
+        elif re.search(r'faceid.sd15.(safetensors|bin)$', basename, re.IGNORECASE):
+            lora_pattern = 'faceid.sd15.lora.safetensors$'
+        elif re.search(r'faceid.plus.sd15.(safetensors|bin)$', basename, re.IGNORECASE):
+            lora_pattern = 'faceid.plus.sd15.lora.safetensors$'
+        elif re.search(r'faceid.plusv2.sdxl.(safetensors|bin)$', basename, re.IGNORECASE):
+            lora_pattern = 'faceid.plusv2.sdxl.lora.safetensors$'
+        elif re.search(r'faceid.plusv2.sd15.(safetensors|bin)$', basename, re.IGNORECASE):
+            lora_pattern = 'faceid.plusv2.sd15.lora.safetensors$'
 
         return lora_pattern
 
@@ -3466,20 +3514,19 @@ class ipadapterApplyEncoder(ipadapter):
         embeds = [embed for embed in embeds if embed is not None]
         embeds = torch.cat(embeds, dim=0)
 
-        match method:
-            case "add":
-                embeds = torch.sum(embeds, dim=0).unsqueeze(0)
-            case "subtract":
-                embeds = embeds[0] - torch.mean(embeds[1:], dim=0)
-                embeds = embeds.unsqueeze(0)
-            case "average":
-                embeds = torch.mean(embeds, dim=0).unsqueeze(0)
-            case "norm average":
-                embeds = torch.mean(embeds / torch.norm(embeds, dim=0, keepdim=True), dim=0).unsqueeze(0)
-            case "max":
-                embeds = torch.max(embeds, dim=0).values.unsqueeze(0)
-            case "min":
-                embeds = torch.min(embeds, dim=0).values.unsqueeze(0)
+        if method == "add":
+            embeds = torch.sum(embeds, dim=0).unsqueeze(0)
+        elif method == "subtract":
+            embeds = embeds[0] - torch.mean(embeds[1:], dim=0)
+            embeds = embeds.unsqueeze(0)
+        elif method == "average":
+            embeds = torch.mean(embeds, dim=0).unsqueeze(0)
+        elif method == "norm average":
+            embeds = torch.mean(embeds / torch.norm(embeds, dim=0, keepdim=True), dim=0).unsqueeze(0)
+        elif method == "max":
+            embeds = torch.max(embeds, dim=0).values.unsqueeze(0)
+        elif method == "min":
+            embeds = torch.min(embeds, dim=0).values.unsqueeze(0)
 
         return embeds
 
@@ -4434,15 +4481,14 @@ class sdTurboSettings:
                 "unsharp_sigma": unsharp_sigma,
                 "unsharp_strength": unsharp_strength,
             }
-        match sampler_name:
-            case "euler_ancestral":
-                sample_function = sample_euler_ancestral
-            case "dpmpp_2s_ancestral":
-                sample_function = sample_dpmpp_2s_ancestral
-            case "dpmpp_2m_sde":
-                sample_function = sample_dpmpp_2m_sde
-            case "lcm":
-                sample_function = sample_lcm
+        if sampler_name == "euler_ancestral":
+            sample_function = sample_euler_ancestral
+        elif sampler_name == "dpmpp_2s_ancestral":
+            sample_function = sample_dpmpp_2s_ancestral
+        elif sampler_name == "dpmpp_2m_sde":
+            sample_function = sample_dpmpp_2m_sde
+        elif sampler_name == "lcm":
+            sample_function = sample_lcm
 
         if sample_function is not None:
             unsharp_kernel_size = unsharp_kernel_size if unsharp_kernel_size % 2 == 1 else unsharp_kernel_size + 1
@@ -5128,6 +5174,7 @@ class samplerFull:
         denoise = denoise if denoise is not None else pipe['loader_settings']['denoise']
         add_noise = pipe['loader_settings']['add_noise'] if 'add_noise' in pipe['loader_settings'] else 'enabled'
         force_full_denoise = pipe['loader_settings']['force_full_denoise'] if 'force_full_denoise' in pipe['loader_settings'] else True
+        noise_device = 'GPU' if 'a1111_prompt_style' in pipe['loader_settings'] and pipe['loader_settings']['a1111_prompt_style'] else 'CPU'
 
         if image is not None and latent is None:
             samp_samples = {"samples": samp_vae.encode(image[:, :, :, :3])}
@@ -5172,7 +5219,7 @@ class samplerFull:
                                  samp_negative,
                                  steps, start_step, last_step, cfg, sampler_name, scheduler, denoise,
                                  image_output, link_id, save_prefix, tile_size, prompt, extra_pnginfo, my_unique_id,
-                                 preview_latent, force_full_denoise=force_full_denoise, disable_noise=disable_noise, samp_custom=None):
+                                 preview_latent, force_full_denoise=force_full_denoise, disable_noise=disable_noise, samp_custom=None, noise_device='cpu'):
 
             # LayerDiffusion
             layerDiffuse = None
@@ -5214,13 +5261,13 @@ class samplerFull:
                     model_type = 'sdxl'
                 sigmas, = alignYourStepsScheduler().get_sigmas(model_type.upper(), steps, denoise)
                 _sampler = comfy.samplers.sampler_object(sampler_name)
-                samp_samples = sampler.custom_ksampler(samp_model, samp_seed, steps, cfg, _sampler, sigmas, samp_positive, samp_negative, samp_samples, disable_noise=disable_noise, preview_latent=preview_latent)
+                samp_samples = sampler.custom_ksampler(samp_model, samp_seed, steps, cfg, _sampler, sigmas, samp_positive, samp_negative, samp_samples, disable_noise=disable_noise, preview_latent=preview_latent, noise_device=noise_device)
             elif scheduler == 'gits':
                 sigmas, = gitsScheduler().get_sigmas(coeff=1.2, steps=steps, denoise=denoise)
                 _sampler = comfy.samplers.sampler_object(sampler_name)
-                samp_samples = sampler.custom_ksampler(samp_model, samp_seed, steps, cfg, _sampler, sigmas, samp_positive, samp_negative, samp_samples, disable_noise=disable_noise, preview_latent=preview_latent)
+                samp_samples = sampler.custom_ksampler(samp_model, samp_seed, steps, cfg, _sampler, sigmas, samp_positive, samp_negative, samp_samples, disable_noise=disable_noise, preview_latent=preview_latent, noise_device=noise_device)
             else:
-                samp_samples = sampler.common_ksampler(samp_model, samp_seed, steps, cfg, sampler_name, scheduler, samp_positive, samp_negative, samp_samples, denoise=denoise, preview_latent=preview_latent, start_step=start_step, last_step=last_step, force_full_denoise=force_full_denoise, disable_noise=disable_noise)
+                samp_samples = sampler.common_ksampler(samp_model, samp_seed, steps, cfg, sampler_name, scheduler, samp_positive, samp_negative, samp_samples, denoise=denoise, preview_latent=preview_latent, start_step=start_step, last_step=last_step, force_full_denoise=force_full_denoise, disable_noise=disable_noise, noise_device=noise_device)
             # 推理结束时间
             end_time = int(time.time() * 1000)
             latent = samp_samples["samples"]
@@ -5234,7 +5281,8 @@ class samplerFull:
                     samp_images = samp_vae.decode_tiled(latent, tile_x=tile_size // 8, tile_y=tile_size // 8, )
                 else:
                     samp_images = samp_vae.decode(latent).cpu()
-
+                if len(samp_images.shape) == 5:  # Combine batches
+                    samp_images = samp_images.reshape(-1, samp_images.shape[-3], samp_images.shape[-2], samp_images.shape[-1])
                 # LayerDiffusion Decode
                 if layerDiffuse is not None:
                     new_images, samp_images, alpha = layerDiffuse.layer_diffusion_decode(layer_diffusion_method, latent, samp_blend_samples, samp_images, samp_model)
@@ -5309,7 +5357,7 @@ class samplerFull:
 
         def process_xyPlot(pipe, samp_model, samp_clip, samp_samples, samp_vae, samp_seed, samp_positive, samp_negative,
                            steps, cfg, sampler_name, scheduler, denoise,
-                           image_output, link_id, save_prefix, tile_size, prompt, extra_pnginfo, my_unique_id, preview_latent, xyPlot, force_full_denoise, disable_noise, samp_custom):
+                           image_output, link_id, save_prefix, tile_size, prompt, extra_pnginfo, my_unique_id, preview_latent, xyPlot, force_full_denoise, disable_noise, samp_custom, noise_device):
 
             sampleXYplot = easyXYPlot(xyPlot, save_prefix, image_output, prompt, extra_pnginfo, my_unique_id, sampler, easyCache)
 
@@ -5317,7 +5365,7 @@ class samplerFull:
                 return process_sample_state(pipe, samp_model, samp_clip, samp_samples, samp_vae, samp_seed, samp_positive,
                                             samp_negative, steps, 0, 10000, cfg,
                                             sampler_name, scheduler, denoise, image_output, link_id, save_prefix, tile_size, prompt,
-                                            extra_pnginfo, my_unique_id, preview_latent, samp_custom=samp_custom)
+                                            extra_pnginfo, my_unique_id, preview_latent, samp_custom=samp_custom, noise_device=noise_device)
 
             # Downscale Model Unet
             if samp_model is not None and downscale_options is not None:
@@ -5342,6 +5390,7 @@ class samplerFull:
 
                 "model": samp_model, "vae": samp_vae, "clip": samp_clip, "positive_cond": samp_positive,
                 "negative_cond": samp_negative,
+                "noise_device":noise_device,
 
                 "ckpt_name": pipe['loader_settings']['ckpt_name'] if "ckpt_name" in pipe["loader_settings"] else None,
                 "vae_name": pipe['loader_settings']['vae_name'] if "vae_name" in pipe["loader_settings"] else None,
@@ -5442,18 +5491,18 @@ class samplerFull:
                     return process_xyPlot(pipe, samp_model, samp_clip, samp_samples, samp_vae, samp_seed, samp_positive,
                                           samp_negative, steps, cfg, sampler_name, scheduler, denoise, image_output,
                                           link_id, save_prefix, tile_size, prompt, extra_pnginfo, my_unique_id,
-                                          preview_latent, xyPlot, force_full_denoise, disable_noise, samp_custom)
+                                          preview_latent, xyPlot, force_full_denoise, disable_noise, samp_custom, noise_device)
                 else:
                     return process_sample_state(pipe, samp_model, samp_clip, samp_samples, samp_vae, samp_seed,
                                                 samp_positive, samp_negative, steps, start_step, last_step, cfg,
                                                 sampler_name, scheduler, denoise, image_output, link_id, save_prefix,
                                                 tile_size, prompt, extra_pnginfo, my_unique_id, preview_latent,
-                                                force_full_denoise, disable_noise, samp_custom)
+                                                force_full_denoise, disable_noise, samp_custom, noise_device)
         else:
             if xyPlot is not None:
-                return process_xyPlot(pipe, samp_model, samp_clip, samp_samples, samp_vae, samp_seed, samp_positive, samp_negative, steps, cfg, sampler_name, scheduler, denoise, image_output, link_id, save_prefix, tile_size, prompt, extra_pnginfo, my_unique_id, preview_latent, xyPlot, force_full_denoise, disable_noise, samp_custom)
+                return process_xyPlot(pipe, samp_model, samp_clip, samp_samples, samp_vae, samp_seed, samp_positive, samp_negative, steps, cfg, sampler_name, scheduler, denoise, image_output, link_id, save_prefix, tile_size, prompt, extra_pnginfo, my_unique_id, preview_latent, xyPlot, force_full_denoise, disable_noise, samp_custom, noise_device)
             else:
-                return process_sample_state(pipe, samp_model, samp_clip, samp_samples, samp_vae, samp_seed, samp_positive, samp_negative, steps, start_step, last_step, cfg, sampler_name, scheduler, denoise, image_output, link_id, save_prefix, tile_size, prompt, extra_pnginfo, my_unique_id, preview_latent, force_full_denoise, disable_noise, samp_custom)
+                return process_sample_state(pipe, samp_model, samp_clip, samp_samples, samp_vae, samp_seed, samp_positive, samp_negative, steps, start_step, last_step, cfg, sampler_name, scheduler, denoise, image_output, link_id, save_prefix, tile_size, prompt, extra_pnginfo, my_unique_id, preview_latent, force_full_denoise, disable_noise, samp_custom, noise_device)
 
 # 简易采样器
 class samplerSimple(samplerFull):
@@ -5703,15 +5752,15 @@ class samplerSimpleInpainting(samplerFull):
         if type == 'random':
             brush_model = BRUSHNET_MODELS['random_mask'][model_type]['model_url']
             if model_type == 'sdxl':
-                pattern = 'brushnet.random.mask.sdxl.*\.(safetensors|bin)$'
+                pattern = 'brushnet.random.mask.sdxl.*.(safetensors|bin)$'
             else:
-                pattern = 'brushnet.random.mask.*\.(safetensors|bin)$'
+                pattern = 'brushnet.random.mask.*.(safetensors|bin)$'
         elif type == 'segmentation':
             brush_model = BRUSHNET_MODELS['segmentation_mask'][model_type]['model_url']
             if model_type == 'sdxl':
-                pattern = 'brushnet.segmentation.mask.sdxl.*\.(safetensors|bin)$'
+                pattern = 'brushnet.segmentation.mask.sdxl.*.(safetensors|bin)$'
             else:
-                pattern = 'brushnet.segmentation.mask.*\.(safetensors|bin)$'
+                pattern = 'brushnet.segmentation.mask.*.(safetensors|bin)$'
 
 
         brushfile = [e for e in folder_paths.get_filename_list('inpaint') if re.search(pattern, e, re.IGNORECASE)]
@@ -5747,46 +5796,49 @@ class samplerSimpleInpainting(samplerFull):
             if vae is None:
                 raise Exception("No VAE found")
 
-        match additional:
-            case 'Differential Diffusion':
-                positive, negative, latent, _model = self.dd(_model, positive, negative, images, vae, mask)
-            case 'InpaintModelCond':
-                if mask is not None:
-                    mask, = GrowMask().expand_mask(mask, grow_mask_by, False)
-                positive, negative, latent = InpaintModelConditioning().encode(positive, negative, images, vae, mask)
-            case 'Fooocus Inpaint':
-                head = list(FOOOCUS_INPAINT_HEAD.keys())[0]
-                patch = list(FOOOCUS_INPAINT_PATCH.keys())[0]
-                if mask is not None:
-                    latent, = VAEEncodeForInpaint().encode(vae, images, mask, grow_mask_by)
-                _model, = applyFooocusInpaint().apply(_model, latent, head, patch)
-            case 'Fooocus Inpaint + DD':
-                head = list(FOOOCUS_INPAINT_HEAD.keys())[0]
-                patch = list(FOOOCUS_INPAINT_PATCH.keys())[0]
-                if mask is not None:
-                    latent, = VAEEncodeForInpaint().encode(vae, images, mask, grow_mask_by)
-                _model, = applyFooocusInpaint().apply(_model, latent, head, patch)
-                positive, negative, latent, _model = self.dd(_model, positive, negative, images, vae, mask)
-            case 'Brushnet Random':
+        if additional == 'Differential Diffusion':
+            positive, negative, latent, _model = self.dd(_model, positive, negative, images, vae, mask)
+        elif additional == 'InpaintModelCond':
+            if mask is not None:
                 mask, = GrowMask().expand_mask(mask, grow_mask_by, False)
-                brush_name = self.get_brushnet_model('random', _model)
-                _model, positive, negative, latent = self.apply_brushnet(brush_name, _model, vae, images, mask, positive, negative)
-            case 'Brushnet Random + DD':
-                mask, = GrowMask().expand_mask(mask, grow_mask_by, False)
-                brush_name = self.get_brushnet_model('random', _model)
-                _model, positive, negative, latent = self.apply_brushnet(brush_name, _model, vae, images, mask, positive, negative)
-                positive, negative, latent, _model = self.dd(_model, positive, negative, images, vae, mask)
-            case 'Brushnet Segmentation':
-                mask, = GrowMask().expand_mask(mask, grow_mask_by, False)
-                brush_name = self.get_brushnet_model('segmentation', _model)
-                _model, positive, negative, latent = self.apply_brushnet(brush_name, _model, vae, images, mask, positive, negative)
-            case 'Brushnet Segmentation + DD':
-                mask, = GrowMask().expand_mask(mask, grow_mask_by, False)
-                brush_name = self.get_brushnet_model('segmentation', _model)
-                _model, positive, negative, latent = self.apply_brushnet(brush_name, _model, vae, images, mask, positive, negative)
-                positive, negative, latent, _model = self.dd(_model, positive, negative, images, vae, mask)
-            case _:
+            positive, negative, latent = InpaintModelConditioning().encode(positive, negative, images, vae, mask)
+        elif additional == 'Fooocus Inpaint':
+            head = list(FOOOCUS_INPAINT_HEAD.keys())[0]
+            patch = list(FOOOCUS_INPAINT_PATCH.keys())[0]
+            if mask is not None:
                 latent, = VAEEncodeForInpaint().encode(vae, images, mask, grow_mask_by)
+            _model, = applyFooocusInpaint().apply(_model, latent, head, patch)
+        elif additional == 'Fooocus Inpaint + DD':
+            head = list(FOOOCUS_INPAINT_HEAD.keys())[0]
+            patch = list(FOOOCUS_INPAINT_PATCH.keys())[0]
+            if mask is not None:
+                latent, = VAEEncodeForInpaint().encode(vae, images, mask, grow_mask_by)
+            _model, = applyFooocusInpaint().apply(_model, latent, head, patch)
+            positive, negative, latent, _model = self.dd(_model, positive, negative, images, vae, mask)
+        elif additional == 'Brushnet Random':
+            mask, = GrowMask().expand_mask(mask, grow_mask_by, False)
+            brush_name = self.get_brushnet_model('random', _model)
+            _model, positive, negative, latent = self.apply_brushnet(brush_name, _model, vae, images, mask, positive,
+                                                                     negative)
+        elif additional == 'Brushnet Random + DD':
+            mask, = GrowMask().expand_mask(mask, grow_mask_by, False)
+            brush_name = self.get_brushnet_model('random', _model)
+            _model, positive, negative, latent = self.apply_brushnet(brush_name, _model, vae, images, mask, positive,
+                                                                     negative)
+            positive, negative, latent, _model = self.dd(_model, positive, negative, images, vae, mask)
+        elif additional == 'Brushnet Segmentation':
+            mask, = GrowMask().expand_mask(mask, grow_mask_by, False)
+            brush_name = self.get_brushnet_model('segmentation', _model)
+            _model, positive, negative, latent = self.apply_brushnet(brush_name, _model, vae, images, mask, positive,
+                                                                     negative)
+        elif additional == 'Brushnet Segmentation + DD':
+            mask, = GrowMask().expand_mask(mask, grow_mask_by, False)
+            brush_name = self.get_brushnet_model('segmentation', _model)
+            _model, positive, negative, latent = self.apply_brushnet(brush_name, _model, vae, images, mask, positive,
+                                                                     negative)
+            positive, negative, latent, _model = self.dd(_model, positive, negative, images, vae, mask)
+        else:
+            latent, = VAEEncodeForInpaint().encode(vae, images, mask, grow_mask_by)
 
         results = super().run(pipe, None, None,None,None,None, image_output, link_id, save_prefix,
                                None, _model, positive, negative, latent, vae, None, None,
@@ -6009,6 +6061,7 @@ class samplerCascadeFull:
         sampler_name = sampler_name if sampler_name is not None else pipe['loader_settings']['sampler_name']
         scheduler = scheduler if scheduler is not None else pipe['loader_settings']['scheduler']
         denoise = denoise if denoise is not None else pipe['loader_settings']['denoise']
+        noise_device = 'gpu' if "a1111_prompt_style" in pipe['loader_settings'] and pipe['loader_settings']['a1111_prompt_style'] else 'cpu'
         # 推理初始时间
         start_time = int(time.time() * 1000)
         # 开始推理
@@ -6016,7 +6069,7 @@ class samplerCascadeFull:
                                                samp_positive, samp_negative, samp_samples, denoise=denoise,
                                                preview_latent=False, start_step=start_step,
                                                last_step=last_step, force_full_denoise=False,
-                                               disable_noise=False)
+                                               disable_noise=False, noise_device=noise_device)
         # 推理结束时间
         end_time = int(time.time() * 1000)
         stage_c = samp_samples["samples"]
@@ -6875,9 +6928,9 @@ class pipeIn:
         vae = vae if vae is not None else pipe.get("vae")
         if vae is None:
             log_node_warn(f'pipeIn[{my_unique_id}]', "VAE missing from pipeLine")
-        clip = clip if clip is not None else pipe.get("clip")
-        if clip is None:
-            log_node_warn(f'pipeIn[{my_unique_id}]', "Clip missing from pipeLine")
+        clip = clip if clip is not None else pipe.get("clip") if pipe is not None and "clip" in pipe else None
+        # if clip is None:
+        #     log_node_warn(f'pipeIn[{my_unique_id}]', "Clip missing from pipeLine")
         if latent is not None:
             samples = latent
         elif image is None:
@@ -7258,7 +7311,7 @@ class pipeXYPlot:
 
     CATEGORY = "EasyUse/Pipe"
 
-    def plot(self, grid_spacing, output_individuals, flip_xy, x_axis, x_values, y_axis, y_values, pipe=None):
+    def plot(self, grid_spacing, output_individuals, flip_xy, x_axis, x_values, y_axis, y_values, pipe=None, font_path=None):
         def clean_values(values):
             original_values = values.split("; ")
             cleaned_values = []
@@ -7305,6 +7358,7 @@ class pipeXYPlot:
                    "x_vals": x_values,
                    "y_axis": y_axis,
                    "y_vals": y_values,
+                   "custom_font": font_path,
                    "grid_spacing": grid_spacing,
                    "output_individuals": output_individuals}
 
@@ -7318,9 +7372,35 @@ class pipeXYPlot:
         return (new_pipe, xy_plot,)
 
 # pipeXYPlotAdvanced
+import platform
 class pipeXYPlotAdvanced:
+    if platform.system() == "Windows":
+        system_root = os.environ.get("SystemRoot")
+        user_root = os.environ.get("USERPROFILE")
+        font_dir = os.path.join(system_root, "Fonts") if system_root else None
+        user_font_dir = os.path.join(user_root, "AppData","Local","Microsoft","Windows", "Fonts") if user_root else None
+
+    # Default debian-based Linux & MacOS font dirs
+    elif platform.system() == "Linux":
+        font_dir = "/usr/share/fonts/truetype"
+        user_font_dir = None
+    elif platform.system() == "Darwin":
+        font_dir = "/System/Library/Fonts"
+        user_font_dir = None
+    else:
+        font_dir = None
+        user_font_dir = None
+
     @classmethod
     def INPUT_TYPES(s):
+        files_list = []
+        if s.font_dir and os.path.exists(s.font_dir):
+            font_dir = s.font_dir
+            files_list = files_list + [f for f in os.listdir(font_dir) if os.path.isfile(os.path.join(font_dir, f)) and f.lower().endswith(".ttf")]
+
+        if s.user_font_dir and os.path.exists(s.user_font_dir):
+            files_list = files_list + [f for f in os.listdir(s.user_font_dir) if os.path.isfile(os.path.join(s.user_font_dir, f)) and f.lower().endswith(".ttf")]
+
         return {
             "required": {
                 "pipe": ("PIPE_LINE",),
@@ -7331,6 +7411,7 @@ class pipeXYPlotAdvanced:
             "optional": {
                 "X": ("X_Y",),
                 "Y": ("X_Y",),
+                "font": (["None"] + files_list,)
             },
             "hidden": {"my_unique_id": "UNIQUE_ID"}
         }
@@ -7341,7 +7422,11 @@ class pipeXYPlotAdvanced:
 
     CATEGORY = "EasyUse/Pipe"
 
-    def plot(self, pipe, grid_spacing, output_individuals, flip_xy, X=None, Y=None, my_unique_id=None):
+    def plot(self, pipe, grid_spacing, output_individuals, flip_xy, X=None, Y=None, font=None, my_unique_id=None):
+        font_path = os.path.join(self.font_dir, font) if font != "None" else None
+        if font_path and not os.path.exists(font_path):
+            font_path = os.path.join(self.user_font_dir, font)
+
         if X != None:
             x_axis = X.get('axis')
             x_values = X.get('values')
@@ -7540,7 +7625,7 @@ class pipeXYPlotAdvanced:
 
             del pipe
 
-        return pipeXYPlot().plot(grid_spacing, output_individuals, flip_xy, x_axis, x_values, y_axis, y_values, new_pipe)
+        return pipeXYPlot().plot(grid_spacing, output_individuals, flip_xy, x_axis, x_values, y_axis, y_values, new_pipe, font_path)
 
 #---------------------------------------------------------------节点束 结束----------------------------------------------------------------------
 
@@ -7690,6 +7775,39 @@ class stableDiffusion3API:
         output_image = stableAPI.generate_sd3_image(positive, negative, aspect_ratio, seed=seed, mode=mode, model=model, strength=denoise, image=optional_image)
         return (output_image,)
 
+from .libs.fluxai import fluxaiAPI
+
+class fluxPromptGenAPI:
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "describe": ("STRING", {"default": "", "placeholder": "Describe your image idea (you can use any language)", "multiline": True}),
+            },
+            "optional": {
+                "cookie_override": ("STRING", {"default": "", "forceInput": True}),
+            },
+            "hidden": {
+                "prompt": "PROMPT",
+                "unique_id": "UNIQUE_ID",
+                "extra_pnginfo": "EXTRA_PNGINFO",
+            },
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("prompt",)
+
+    FUNCTION = "generate"
+    OUTPUT_NODE = False
+
+    CATEGORY = "EasyUse/API"
+
+    def generate(self, describe, cookie_override=None, prompt=None, unique_id=None, extra_pnginfo=None):
+        prompt = fluxaiAPI.promptGenerate(describe, cookie_override)
+        return (prompt,)
+
+
 #---------------------------------------------------------------API 结束----------------------------------------------------------------------
 
 NODE_CLASS_MAPPINGS = {
@@ -7720,6 +7838,7 @@ NODE_CLASS_MAPPINGS = {
     "easy kolorsLoader": kolorsLoader,
     "easy fluxLoader": fluxLoader,
     "easy pixArtLoader": pixArtLoader,
+    "easy mochiLoader": mochiLoader,
     "easy loraStack": loraStack,
     "easy controlnetStack": controlnetStack,
     "easy controlnetLoader": controlnetSimple,
@@ -7794,6 +7913,7 @@ NODE_CLASS_MAPPINGS = {
     "easy XYInputs: Seeds++ Batch": XYplot_SeedsBatch,
     "easy XYInputs: Steps": XYplot_Steps,
     "easy XYInputs: CFG Scale": XYplot_CFG,
+    "easy XYInputs: FluxGuidance": XYplot_FluxGuidance,
     "easy XYInputs: Sampler/Scheduler": XYplot_Sampler_Scheduler,
     "easy XYInputs: Denoise": XYplot_Denoise,
     "easy XYInputs: Checkpoint": XYplot_Checkpoint,
@@ -7812,6 +7932,7 @@ NODE_CLASS_MAPPINGS = {
     "dynamicThresholdingFull": dynamicThresholdingFull,
     # api 相关
     "easy stableDiffusion3API": stableDiffusion3API,
+    "easy fluxPromptGenAPI": fluxPromptGenAPI,
     # utils
     "easy ckptNames": setCkptName,
     "easy controlnetNames": setControlName,
@@ -7845,6 +7966,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "easy fluxLoader": "EasyLoader (Flux)",
     "easy hunyuanDiTLoader": "EasyLoader (HunyuanDiT)",
     "easy pixArtLoader": "EasyLoader (PixArt)",
+    "easy mochiLoader": "EasyLoader (Mochi)",
     "easy loraStack": "EasyLoraStack",
     "easy controlnetStack": "EasyControlnetStack",
     "easy controlnetLoader": "EasyControlnet",
@@ -7919,6 +8041,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "easy XYInputs: Seeds++ Batch": "XY Inputs: Seeds++ Batch //EasyUse",
     "easy XYInputs: Steps": "XY Inputs: Steps //EasyUse",
     "easy XYInputs: CFG Scale": "XY Inputs: CFG Scale //EasyUse",
+    "easy XYInputs: FluxGuidance": "XY Inputs: Flux Guidance //EasyUse",
     "easy XYInputs: Sampler/Scheduler": "XY Inputs: Sampler/Scheduler //EasyUse",
     "easy XYInputs: Denoise": "XY Inputs: Denoise //EasyUse",
     "easy XYInputs: Checkpoint": "XY Inputs: Checkpoint //EasyUse",
@@ -7937,6 +8060,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "dynamicThresholdingFull": "DynamicThresholdingFull",
     # api 相关
     "easy stableDiffusion3API": "Stable Diffusion 3 (API)",
+    "easy fluxPromptGenAPI": "Flux Prompt Gen (API)",
     # utils
     "easy ckptNames": "Ckpt Names",
     "easy controlnetNames": "ControlNet Names",

@@ -4,10 +4,11 @@ from decimal import Decimal
 from .libs.utils import AlwaysEqualProxy, ByPassTypeTuple, cleanGPUUsedForce, compare_revision
 from .libs.cache import cache, update_cache, remove_cache
 from .libs.log import log_node_info, log_node_warn
-from nodes import PreviewImage, SaveImage
+from nodes import PreviewImage, SaveImage, NODE_CLASS_MAPPINGS as ALL_NODE_CLASS_MAPPINGS
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 from PIL.PngImagePlugin import PngInfo
 import numpy as np
+import time
 import os
 import re
 import csv
@@ -579,7 +580,7 @@ class mathFloatOperation:
         elif operation == "multiply":
             return (a * b,)
         elif operation == "divide":
-            return (a // b,)
+            return (a / b,)
         elif operation == "modulo":
             return (a % b,)
         elif operation == "power":
@@ -649,10 +650,10 @@ class whileLoopStart:
             },
         }
         for i in range(MAX_FLOW_NUM):
-            inputs["optional"]["initial_value%d" % i] = ("*",)
+            inputs["optional"]["initial_value%d" % i] = (any_type,)
         return inputs
 
-    RETURN_TYPES = ByPassTypeTuple(tuple(["FLOW_CONTROL"] + ["*"] * MAX_FLOW_NUM))
+    RETURN_TYPES = ByPassTypeTuple(tuple(["FLOW_CONTROL"] + [any_type] * MAX_FLOW_NUM))
     RETURN_NAMES = ByPassTypeTuple(tuple(["flow"] + ["value%d" % i for i in range(MAX_FLOW_NUM)]))
     FUNCTION = "while_loop_open"
 
@@ -681,29 +682,50 @@ class whileLoopEnd:
             "hidden": {
                 "dynprompt": "DYNPROMPT",
                 "unique_id": "UNIQUE_ID",
+                "extra_pnginfo": "EXTRA_PNGINFO",
             }
         }
         for i in range(MAX_FLOW_NUM):
-            inputs["optional"]["initial_value%d" % i] = (AlwaysEqualProxy('*'),)
+            inputs["optional"]["initial_value%d" % i] = (any_type,)
         return inputs
 
-    RETURN_TYPES = ByPassTypeTuple(tuple([AlwaysEqualProxy('*')] * MAX_FLOW_NUM))
+    RETURN_TYPES = ByPassTypeTuple(tuple([any_type] * MAX_FLOW_NUM))
     RETURN_NAMES = ByPassTypeTuple(tuple(["value%d" % i for i in range(MAX_FLOW_NUM)]))
     FUNCTION = "while_loop_close"
 
     CATEGORY = "EasyUse/Logic/While Loop"
 
-    def explore_dependencies(self, node_id, dynprompt, upstream):
+    def explore_dependencies(self, node_id, dynprompt, upstream, parent_ids):
         node_info = dynprompt.get_node(node_id)
         if "inputs" not in node_info:
             return
+
         for k, v in node_info["inputs"].items():
             if is_link(v):
                 parent_id = v[0]
+                display_id = dynprompt.get_display_node_id(parent_id)
+                display_node = dynprompt.get_node(display_id)
+                class_type = display_node["class_type"]
+                if class_type not in ['easy forLoopEnd', 'easy whileLoopEnd']:
+                    parent_ids.append(display_id)
                 if parent_id not in upstream:
                     upstream[parent_id] = []
-                    self.explore_dependencies(parent_id, dynprompt, upstream)
+                    self.explore_dependencies(parent_id, dynprompt, upstream, parent_ids)
+
                 upstream[parent_id].append(node_id)
+
+    def explore_output_nodes(self, dynprompt, upstream, output_nodes, parent_ids):
+        for parent_id in upstream:
+            display_id = dynprompt.get_display_node_id(parent_id)
+            for output_id in output_nodes:
+                id = output_nodes[output_id][0]
+                if id in parent_ids and display_id == id and output_id not in upstream[parent_id]:
+                    if '.' in parent_id:
+                        arr = parent_id.split('.')
+                        arr[len(arr)-1] = output_id
+                        upstream[parent_id].append('.'.join(arr))
+                    else:
+                        upstream[parent_id].append(output_id)
 
     def collect_contained(self, node_id, upstream, contained):
         if node_id not in upstream:
@@ -713,7 +735,7 @@ class whileLoopEnd:
                 contained[child_id] = True
                 self.collect_contained(child_id, upstream, contained)
 
-    def while_loop_close(self, flow, condition, dynprompt=None, unique_id=None, **kwargs):
+    def while_loop_close(self, flow, condition, dynprompt=None, unique_id=None,**kwargs):
         if not condition:
             # We're done with the loop
             values = []
@@ -725,15 +747,31 @@ class whileLoopEnd:
         this_node = dynprompt.get_node(unique_id)
         upstream = {}
         # Get the list of all nodes between the open and close nodes
-        self.explore_dependencies(unique_id, dynprompt, upstream)
+        parent_ids = []
+        self.explore_dependencies(unique_id, dynprompt, upstream, parent_ids)
+        parent_ids = list(set(parent_ids))
+        # Get the list of all output nodes between the open and close nodes
+        prompts = dynprompt.get_original_prompt()
+        output_nodes = {}
+        for id in prompts:
+            node = prompts[id]
+            if "inputs" not in node:
+                continue
+            class_type = node["class_type"]
+            class_def = ALL_NODE_CLASS_MAPPINGS[class_type]
+            if hasattr(class_def, 'OUTPUT_NODE') and class_def.OUTPUT_NODE == True:
+                for k, v in node['inputs'].items():
+                    if is_link(v):
+                        output_nodes[id] = v
 
+        graph = GraphBuilder()
+        self.explore_output_nodes(dynprompt, upstream, output_nodes, parent_ids)
         contained = {}
         open_node = flow[0]
         self.collect_contained(open_node, upstream, contained)
         contained[unique_id] = True
         contained[open_node] = True
 
-        graph = GraphBuilder()
         for node_id in contained:
             original_node = dynprompt.get_node(node_id)
             node = graph.node(original_node["class_type"], "Recurse" if node_id == unique_id else node_id)
@@ -790,8 +828,6 @@ class forLoopStart:
     def for_loop_start(self, total, prompt=None, extra_pnginfo=None, unique_id=None, **kwargs):
         graph = GraphBuilder()
         i = 0
-        unique_id = unique_id.split('.')[len(unique_id.split('.')) - 1] if "." in unique_id else unique_id
-        update_cache('forloop' + str(unique_id), 'forloop', total)
         if "initial_value0" in kwargs:
             i = kwargs["initial_value0"]
 
@@ -819,7 +855,7 @@ class forLoopEnd:
                 "initial_value%d" % i: (any_type, {"rawLink": True}) for i in range(1, MAX_FLOW_NUM)
             },
             "hidden": {
-                "prompt": "PROMPT",
+                "dynprompt": "DYNPROMPT",
                 "extra_pnginfo": "EXTRA_PNGINFO",
                 "unique_id": "UNIQUE_ID"
             },
@@ -831,18 +867,33 @@ class forLoopEnd:
 
     CATEGORY = "EasyUse/Logic/For Loop"
 
-    def for_loop_end(self, flow, prompt=None, extra_pnginfo=None, unique_id=None, **kwargs):
+
+
+    def for_loop_end(self, flow, dynprompt=None, extra_pnginfo=None, unique_id=None, **kwargs):
         graph = GraphBuilder()
         while_open = flow[0]
         total = None
-        if "forloop" + str(while_open) in cache:
-            total = cache['forloop' + str(while_open)][1]
-        elif extra_pnginfo:
-            all_nodes = extra_pnginfo['workflow']['nodes']
-            start_node = next((x for x in all_nodes if x['id'] == int(while_open)), None)
-            total = start_node['widgets_values'][0] if "widgets_values" in start_node else None
-        if total is None:
-            raise Exception("Unable to get parameters for the start of the loop")
+
+        # Using dynprompt to get the original node
+        forstart_node = dynprompt.get_node(while_open)
+        if forstart_node['class_type'] == 'easy forLoopStart':
+            inputs = forstart_node['inputs']
+            total = inputs['total']
+        elif forstart_node['class_type'] == 'easy loadImagesForLoop':
+            inputs = forstart_node['inputs']
+            limit = inputs['limit']
+            start_index = inputs['start_index']
+            # Filter files by extension
+            directory = inputs['directory']
+            dir_files = os.listdir(directory)
+            valid_extensions = ['.jpg', '.jpeg', '.png', '.webp']
+            dir_files = [f for f in dir_files if any(f.lower().endswith(ext) for ext in valid_extensions)]
+            if limit == -1:
+                files_length = len(dir_files)
+                total = files_length - start_index if start_index > 0 else files_length
+            else:
+                total = limit
+
         sub = graph.node("easy mathInt", operation="add", a=[while_open, 1], b=1)
         cond = graph.node("easy compare", a=sub.out(0), b=total, comparison='a < b')
         input_values = {("initial_value%d" % i): kwargs.get("initial_value%d" % i, None) for i in
@@ -1057,8 +1108,8 @@ class pixels:
 
         width = width * scale
         height = height * scale
-        width_norm = width - width % 8
-        height_norm = height - height % 8
+        width_norm = int(width - width % 8)
+        height_norm = int(height - height % 8)
         flip_wh = kwargs['flip_w/h']
         if flip_wh:
             width, height = height, width
@@ -1125,6 +1176,30 @@ class lengthAnything:
             return
         return (len(any),)
 
+class indexAnything:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "any": (any_type, {}),
+                "index": ("INT", {"default": 0, "min": 0, "max": 1000000, "step": 1}),
+            }
+        }
+
+    RETURN_TYPES = (any_type,)
+    RETURN_NAMES = ("out",)
+
+    FUNCTION = "getIndex"
+    CATEGORY = "EasyUse/Logic"
+
+    def getIndex(self, any, index):
+        if isinstance(any, torch.Tensor):
+            batch_index = min(any.shape[0] - 1, index)
+            s = any[index:index + 1].clone()
+            return (s,)
+        else:
+            return (any[index],)
+
 
 class batchAnything:
     @classmethod
@@ -1142,7 +1217,23 @@ class batchAnything:
     FUNCTION = "batch"
     CATEGORY = "EasyUse/Logic"
 
+    def latentBatch(self, any_1, any_2):
+        samples_out = any_1.copy()
+        s1 = any_1["samples"]
+        s2 = any_2["samples"]
+
+        if s1.shape[1:] != s2.shape[1:]:
+            s2 = comfy.utils.common_upscale(s2, s1.shape[3], s1.shape[2], "bilinear", "center")
+        s = torch.cat((s1, s2), dim=0)
+        samples_out["samples"] = s
+        samples_out["batch_index"] = any_1.get("batch_index",
+                                               [x for x in range(0, s1.shape[0])]) + any_2.get(
+            "batch_index", [x for x in range(0, s2.shape[0])])
+
+        return samples_out
+
     def batch(self, any_1, any_2):
+
         if isinstance(any_1, torch.Tensor) or isinstance(any_2, torch.Tensor):
             if any_1 is None:
                 return (any_2,)
@@ -1164,6 +1255,16 @@ class batchAnything:
             elif isinstance(any_1, tuple):
                 return (any_1 + (any_2,),)
             return ((any_2, any_1),)
+        elif isinstance(any_1, dict) and 'samples' in any_1:
+            if any_2 is None:
+                return (any_1,)
+            elif isinstance(any_2, dict) and 'samples' in any_2:
+                return (self.latentBatch(any_1, any_2),)
+        elif isinstance(any_2, dict) and 'samples' in any_2:
+            if any_1 is None:
+                return (any_2,)
+            elif isinstance(any_1, dict) and 'samples' in any_1:
+                return (self.latentBatch(any_2, any_1),)
         else:
             if any_1 is None:
                 return (any_2,)
@@ -1239,8 +1340,10 @@ class showAnything:
             node = next((x for x in workflow["nodes"] if str(x["id"]) == unique_id[0]), None)
             if node:
                 node["widgets_values"] = [values]
-
-        return {"ui": {"text": values}, "result": (values,), }
+        if isinstance(values, list) and len(values) == 1:
+            return {"ui": {"text": values}, "result": (values[0],), }
+        else:
+            return {"ui": {"text": values}, "result": (values,), }
 
 class showAnythingLazy(showAnything):
     @classmethod
@@ -1253,6 +1356,7 @@ class showAnythingLazy(showAnything):
     RETURN_NAMES = ('output',)
     INPUT_IS_LIST = True
     OUTPUT_NODE = False
+    OUTPUT_IS_LIST = (False,)
     FUNCTION = "log_input"
     CATEGORY = "EasyUse/Logic"
 
@@ -1552,12 +1656,7 @@ class saveText:
             os.makedirs(output_file_path)
 
         if not overwrite:
-            while os.path.exists(filepath):
-                if os.path.exists(filepath):
-                    filepath = str(os.path.join(output_file_path, file_name)) + "_" + str(index) + "." + file_extension
-                    index = index + 1
-                else:
-                    break
+            pass
 
         log_node_info("Save Text", f"Saving to {filepath}")
 
@@ -1566,13 +1665,13 @@ class saveText:
             for i in text.split("\n"):
                 text_list.append(i.strip())
 
-            with open(filepath, "w", newline="") as csv_file:
+            with open(filepath, "w", newline="", encoding='utf-8') as csv_file:
                 csv_writer = csv.writer(csv_file)
                 # Write each line as a separate row in the CSV file
                 for line in text_list:
                     csv_writer.writerow([line])
         else:
-            with open(filepath, "w", newline="") as text_file:
+            with open(filepath, "w", newline="", encoding='utf-8') as text_file:
                 for line in text:
                     text_file.write(line)
 
@@ -1637,6 +1736,25 @@ class saveTextLazy(saveText):
     CATEGORY = "EasyUse/Logic"
 
 
+class sleep:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "any": (any_type, {}),
+                "delay": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1000000, "step": 0.1}),
+            },
+        }
+
+    RETURN_TYPES = (any_type,)
+    RETURN_NAMES = ("out",)
+    FUNCTION = "execute"
+    CATEGORY = "EasyUse/Logic"
+
+    def execute(self, any, delay):
+        time.sleep(delay)
+        return (any,)
+
 NODE_CLASS_MAPPINGS = {
     "easy string": String,
     "easy int": Int,
@@ -1669,6 +1787,7 @@ NODE_CLASS_MAPPINGS = {
     "easy pixels": pixels,
     "easy xyAny": xyAny,
     "easy lengthAnything": lengthAnything,
+    "easy indexAnything": indexAnything,
     "easy batchAnything": batchAnything,
     "easy convertAnything": convertAnything,
     "easy showAnything": showAnything,
@@ -1679,6 +1798,7 @@ NODE_CLASS_MAPPINGS = {
     "easy cleanGpuUsed": cleanGPUUsed,
     "easy saveText": saveText,
     "easy saveTextLazy": saveTextLazy,
+    "easy sleep": sleep,
     "easy if": If,
     "easy poseEditor": poseEditor,
     "easy imageToMask": imageToMask,
@@ -1715,6 +1835,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "easy pixels": "Pixels W/H Norm",
     "easy xyAny": "XY Any",
     "easy lengthAnything": "Length Any",
+    "easy indexAnything": "Index Any",
     "easy batchAnything": "Batch Any",
     "easy convertAnything": "Convert Any",
     "easy showAnything": "Show Any",
@@ -1725,6 +1846,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "easy cleanGpuUsed": "Clean VRAM Used",
     "easy saveText": "Save Text",
     "easy saveTextLazy": "Save Text (Lazy)",
+    "easy sleep": "Sleep",
     "easy if": "If (🚫Deprecated)",
     "easy poseEditor": "PoseEditor (🚫Deprecated)",
     "easy imageToMask": "ImageToMask (🚫Deprecated)"

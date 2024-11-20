@@ -14,7 +14,7 @@ def prompt_to_cond(type, model, clip, clip_skip, lora_stack, text, prompt_token_
     if model_type not in ['hydit'] and text is not None and has_chinese(text):
         text = zh_to_en([text])[0]
 
-    if model_type in ['hydit', 'flux']:
+    if model_type in ['hydit', 'flux', 'mochi']:
         log_node_warn(title + "...")
         embeddings_final, = CLIPTextEncode().encode(clip, text) if text is not None else (None,)
 
@@ -28,8 +28,10 @@ def prompt_to_cond(type, model, clip, clip_skip, lora_stack, text, prompt_token_
     wildcard_prompt = cond_decode if show_prompt or styles_selector else ""
 
     clipped = clip.clone()
-    if clip_skip != 0:
-        clipped.clip_layer(clip_skip)
+    # 当clip模型不存在t5xxl时，可执行跳过层
+    if not hasattr(clip.cond_stage_model, 't5xxl'):
+        if clip_skip != 0:
+            clipped.clip_layer(clip_skip)
 
     steps = steps if steps is not None else find_nearest_steps(my_unique_id, prompt)
     return (advanced_encode(clipped, text, prompt_token_normalization,
