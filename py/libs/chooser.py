@@ -2,6 +2,10 @@ from server import PromptServer
 from aiohttp import web
 import time
 
+from comfy.cli_args import args
+import requests
+import folder_paths
+
 class ChooserCancelled(Exception):
     pass
 
@@ -47,6 +51,21 @@ class ChooserMessage:
 
 @PromptServer.instance.routes.post('/easyuse/image_chooser_message')
 async def make_image_selection(request):
+    if getattr(folder_paths, "prompt_host", None) is not None:
+        return web.json_response({})
     post = await request.post()
+    ChooserMessage.addMessage(post.get("id"), post.get("message"))
+
+    if args.just_ui:
+        if args.serverless:
+            requests.post(f'http://{folder_paths.server_host}/api/easyuse/get_image_chooser_message', headers={"Authorization": folder_paths.token, "Ossrelativepath": args.oss_relative_path, "x-eas-uid": args.uid, "x-eas-parent-id": args.parent_uid, "sid": folder_paths.ori_prompt_id}, json=content)
+        else:
+            requests.post(f'http://{folder_paths.server_host}/easyuse/get_image_chooser_message', headers={"Authorization": folder_paths.token, "Ossrelativepath": args.oss_relative_path, "x-eas-uid": args.uid, "x-eas-parent-id": args.parent_uid, "sid": folder_paths.ori_prompt_id}, json=content)
+    return web.json_response({})
+
+
+@routes.post('/easyuse/get_image_chooser_message')
+async def get_image_selection(request):
+    post = await request.json()
     ChooserMessage.addMessage(post.get("id"), post.get("message"))
     return web.json_response({})
