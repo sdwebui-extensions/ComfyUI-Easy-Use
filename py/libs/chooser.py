@@ -64,7 +64,7 @@ async def make_image_selection(request):
     return web.json_response({})
 
 
-@routes.post('/easyuse/get_image_chooser_message')
+@PromptServer.instance.routes.post('/easyuse/get_image_chooser_message')
 async def get_image_selection(request):
     post = await request.json()
     ChooserMessage.addMessage(post.get("id"), post.get("message"))
