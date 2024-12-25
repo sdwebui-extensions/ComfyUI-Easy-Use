@@ -54,6 +54,7 @@ async def make_image_selection(request):
     if getattr(folder_paths, "prompt_host", None) is not None:
         return web.json_response({})
     post = await request.post()
+    content = {"id":post.get("id"), "message":post.get("message")}
     ChooserMessage.addMessage(post.get("id"), post.get("message"))
 
     if args.just_ui:
