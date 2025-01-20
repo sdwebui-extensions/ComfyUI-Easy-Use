@@ -42,7 +42,7 @@ RESOURCES_DIR = os.path.join(Path(__file__).parent.parent, "resources")
 
 # inpaint
 INPAINT_DIR = os.path.join(folder_paths.models_dir, "inpaint")
-FOOOCUS_STYLES_DIR = os.path.join(Path(__file__).parent.parent, "styles")
+FOOOCUS_STYLES_DIR = os.path.join(folder_paths.models_dir, "styles")
 FOOOCUS_STYLES_SAMPLES = 'https://raw.githubusercontent.com/lllyasviel/Fooocus/main/sdxl_styles/samples/'
 FOOOCUS_INPAINT_HEAD = {
     "fooocus_inpaint_head": {
