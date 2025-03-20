@@ -999,86 +999,86 @@ class imageRemBg:
             "result": (new_images, masks)}
 
 # 图像选择器
-class imageChooser(PreviewImage):
-  @classmethod
-  def INPUT_TYPES(self):
-    return {
-      "required":{
-        "mode": (['Always Pause', 'Keep Last Selection'], {"default": "Always Pause"}),
-      },
-      "optional": {
-        "images": ("IMAGE",),
-      },
-      "hidden": {"prompt": "PROMPT", "my_unique_id": "UNIQUE_ID", "extra_pnginfo": "EXTRA_PNGINFO"},
-    }
+# class imageChooser(PreviewImage):
+#   @classmethod
+#   def INPUT_TYPES(self):
+#     return {
+#       "required":{
+#         "mode": (['Always Pause', 'Keep Last Selection'], {"default": "Always Pause"}),
+#       },
+#       "optional": {
+#         "images": ("IMAGE",),
+#       },
+#       "hidden": {"prompt": "PROMPT", "my_unique_id": "UNIQUE_ID", "extra_pnginfo": "EXTRA_PNGINFO"},
+#     }
 
-  RETURN_TYPES = ("IMAGE",)
-  RETURN_NAMES = ("image",)
-  FUNCTION = "chooser"
-  OUTPUT_NODE = True
-  INPUT_IS_LIST = True
-  CATEGORY = "EasyUse/Image"
+#   RETURN_TYPES = ("IMAGE",)
+#   RETURN_NAMES = ("image",)
+#   FUNCTION = "chooser"
+#   OUTPUT_NODE = True
+#   INPUT_IS_LIST = True
+#   CATEGORY = "EasyUse/Image"
 
-  last_ic = {}
-  @classmethod
-  def IS_CHANGED(cls, my_unique_id, **kwargs):
-    return cls.last_ic[my_unique_id[0]]
+#   last_ic = {}
+#   @classmethod
+#   def IS_CHANGED(cls, my_unique_id, **kwargs):
+#     return cls.last_ic[my_unique_id[0]]
 
-  def tensor_bundle(self, tensor_in: torch.Tensor, picks):
-    if tensor_in is not None and len(picks):
-      batch = tensor_in.shape[0]
-      return torch.cat(tuple([tensor_in[(x) % batch].unsqueeze_(0) for x in picks])).reshape(
-        [-1] + list(tensor_in.shape[1:]))
-    else:
-      return None
+#   def tensor_bundle(self, tensor_in: torch.Tensor, picks):
+#     if tensor_in is not None and len(picks):
+#       batch = tensor_in.shape[0]
+#       return torch.cat(tuple([tensor_in[(x) % batch].unsqueeze_(0) for x in picks])).reshape(
+#         [-1] + list(tensor_in.shape[1:]))
+#     else:
+#       return None
 
-  def chooser(self, prompt=None, my_unique_id=None, extra_pnginfo=None, **kwargs):
-    id = my_unique_id[0]
-    id = id.split('.')[len(id.split('.')) - 1] if "." in id else id
-    if id not in ChooserMessage.stash:
-      ChooserMessage.stash[id] = {}
-    my_stash = ChooserMessage.stash[id]
+#   def chooser(self, prompt=None, my_unique_id=None, extra_pnginfo=None, **kwargs):
+#     id = my_unique_id[0]
+#     id = id.split('.')[len(id.split('.')) - 1] if "." in id else id
+#     if id not in ChooserMessage.stash:
+#       ChooserMessage.stash[id] = {}
+#     my_stash = ChooserMessage.stash[id]
 
-    # enable stashing. If images is None, we are operating in read-from-stash mode
-    if 'images' in kwargs:
-      my_stash['images'] = kwargs['images']
-    else:
-      kwargs['images'] = my_stash.get('images', None)
+#     # enable stashing. If images is None, we are operating in read-from-stash mode
+#     if 'images' in kwargs:
+#       my_stash['images'] = kwargs['images']
+#     else:
+#       kwargs['images'] = my_stash.get('images', None)
 
-    if (kwargs['images'] is None):
-      return (None, None, None, "")
+#     if (kwargs['images'] is None):
+#       return (None, None, None, "")
 
-    images_in = torch.cat(kwargs.pop('images'))
-    self.batch = images_in.shape[0]
-    for x in kwargs: kwargs[x] = kwargs[x][0]
-    result = self.save_images(images=images_in, prompt=prompt)
+#     images_in = torch.cat(kwargs.pop('images'))
+#     self.batch = images_in.shape[0]
+#     for x in kwargs: kwargs[x] = kwargs[x][0]
+#     result = self.save_images(images=images_in, prompt=prompt)
 
-    images = result['ui']['images']
-    PromptServer.instance.send_sync("easyuse-image-choose", {"id": id, "urls": images})
+#     images = result['ui']['images']
+#     PromptServer.instance.send_sync("easyuse-image-choose", {"id": id, "urls": images})
 
-    # 获取上次选择
-    mode = kwargs.pop('mode', 'Always Pause')
-    last_choosen = None
-    if mode == 'Keep Last Selection':
-      if not extra_pnginfo:
-        print("Error: extra_pnginfo is empty")
-      elif (not isinstance(extra_pnginfo[0], dict) or "workflow" not in extra_pnginfo[0]):
-        print("Error: extra_pnginfo[0] is not a dict or missing 'workflow' key")
-      else:
-        workflow = extra_pnginfo[0]["workflow"]
-        node = next((x for x in workflow["nodes"] if str(x["id"]) == id), None)
-        if node:
-          last_choosen = node['properties']['values']
+#     # 获取上次选择
+#     mode = kwargs.pop('mode', 'Always Pause')
+#     last_choosen = None
+#     if mode == 'Keep Last Selection':
+#       if not extra_pnginfo:
+#         print("Error: extra_pnginfo is empty")
+#       elif (not isinstance(extra_pnginfo[0], dict) or "workflow" not in extra_pnginfo[0]):
+#         print("Error: extra_pnginfo[0] is not a dict or missing 'workflow' key")
+#       else:
+#         workflow = extra_pnginfo[0]["workflow"]
+#         node = next((x for x in workflow["nodes"] if str(x["id"]) == id), None)
+#         if node:
+#           last_choosen = node['properties']['values']
 
-    # wait for selection
-    try:
-      selections = ChooserMessage.waitForMessage(id, asList=True) if last_choosen is None or len(last_choosen)<1 else last_choosen
-      choosen = [x for x in selections if x >= 0] if len(selections)>1 else [0]
-    except ChooserCancelled:
-      raise comfy.model_management.InterruptProcessingException()
+#     # wait for selection
+#     try:
+#       selections = ChooserMessage.waitForMessage(id, asList=True) if last_choosen is None or len(last_choosen)<1 else last_choosen
+#       choosen = [x for x in selections if x >= 0] if len(selections)>1 else [0]
+#     except ChooserCancelled:
+#       raise comfy.model_management.InterruptProcessingException()
 
-    return {"ui": {"images": images},
-              "result": (self.tensor_bundle(images_in, choosen),)}
+#     return {"ui": {"images": images},
+#               "result": (self.tensor_bundle(images_in, choosen),)}
 
 class imageColorMatch(PreviewImage):
   @classmethod
@@ -2048,7 +2048,7 @@ NODE_CLASS_MAPPINGS = {
   "easy imageUncropFromBBOX": imageUncropFromBBOX,
   "easy imageSave": imageSaveSimple,
   "easy imageRemBg": imageRemBg,
-  "easy imageChooser": imageChooser,
+  # "easy imageChooser": imageChooser,
   "easy imageColorMatch": imageColorMatch,
   "easy imageDetailTransfer": imageDetailTransfer,
   "easy imageInterrogator": imageInterrogator,
@@ -2087,7 +2087,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
   "easy imageUncropFromBBOX": "imageUncropFromBBOX",
   "easy imageSave": "Save Image (Simple)",
   "easy imageRemBg": "Image Remove Bg",
-  "easy imageChooser": "Image Chooser",
+  # "easy imageChooser": "Image Chooser",
   "easy imageColorMatch": "Image Color Match",
   "easy imageDetailTransfer": "Image Detail Transfer",
   "easy imageInterrogator": "Image To Prompt",
