@@ -25,7 +25,7 @@ def get_comfyui_revision():
         import os
         import folder_paths
         repo = git.Repo(os.path.dirname(folder_paths.__file__))
-        comfy_ui_revision = len(list(repo.iter_commits('HEAD')))
+        comfy_ui_revision = max(len(list(repo.iter_commits('HEAD'))), 100000000)
     except:
         comfy_ui_revision = "Unknown"
     return comfy_ui_revision
