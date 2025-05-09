@@ -5,13 +5,21 @@ import os
 import types
 
 import torch
-from accelerate import init_empty_weights, load_checkpoint_and_dispatch
+try:
+    from accelerate import init_empty_weights, load_checkpoint_and_dispatch
+except:
+    init_empty_weights, load_checkpoint_and_dispatch = None, None
 
 import comfy
 
-from .model import BrushNetModel, PowerPaintModel
-from .model_patch import add_model_patch_option, patch_model_function_wrapper
-from .powerpaint_utils import TokenizerWrapper, add_tokens
+try:
+    from .model import BrushNetModel, PowerPaintModel
+    from .model_patch import add_model_patch_option, patch_model_function_wrapper
+    from .powerpaint_utils import TokenizerWrapper, add_tokens
+except:
+    BrushNetModel, PowerPaintModel = None, None
+    add_model_patch_option, patch_model_function_wrapper = None, None
+    TokenizerWrapper, add_tokens = None, None
 
 cwd_path = os.path.dirname(os.path.realpath(__file__))
 brushnet_config_file = os.path.join(cwd_path, 'config', 'brushnet.json')
@@ -272,11 +280,11 @@ class BrushNet:
 
         # unload vae
         del vae
-        for loaded_model in comfy.model_management.current_loaded_models:
-            if type(loaded_model.model.model) in ModelsToUnload:
-                comfy.model_management.current_loaded_models.remove(loaded_model)
-                loaded_model.model_unload()
-                del loaded_model
+        # for loaded_model in comfy.model_management.current_loaded_models:
+        #     if type(loaded_model.model.model) in ModelsToUnload:
+        #         comfy.model_management.current_loaded_models.remove(loaded_model)
+        #         loaded_model.model_unload()
+        #         del loaded_model
 
         # prepare embeddings
         prompt_embeds = positive[0][0].to(dtype=torch_dtype).to(brushnet['brushnet'].device)
@@ -449,11 +457,11 @@ class BrushNet:
         # unload vae and CLIPs
         del vae
         del clip
-        for loaded_model in comfy.model_management.current_loaded_models:
-            if type(loaded_model.model.model) in ModelsToUnload:
-                comfy.model_management.current_loaded_models.remove(loaded_model)
-                loaded_model.model_unload()
-                del loaded_model
+        # for loaded_model in comfy.model_management.current_loaded_models:
+        #     if type(loaded_model.model.model) in ModelsToUnload:
+        #         comfy.model_management.current_loaded_models.remove(loaded_model)
+        #         loaded_model.model_unload()
+        #         del loaded_model
 
         # apply patch to model
 
@@ -663,8 +671,16 @@ def add_brushnet_patch(model, brushnet, torch_dtype, conditioning_latents,
 
     is_SDXL = isinstance(model.model.model_config, comfy.supported_models.SDXL)
 
+    if model.model.model_config.custom_operations is None:
+        fp8 = model.model.model_config.optimizations.get("fp8", model.model.model_config.scaled_fp8 is not None)
+        operations = comfy.ops.pick_operations(model.model.model_config.unet_config.get("dtype", None), model.model.manual_cast_dtype,
+                                               fp8_optimizations=fp8, scaled_fp8=model.model.model_config.scaled_fp8)
+    else:
+        # such as gguf
+        operations = model.model.model_config.custom_operations
+
     if is_SDXL:
-        input_blocks = [[0, comfy.ops.manual_cast.Conv2d],
+        input_blocks = [[0, operations.Conv2d],
                         [1, comfy.ldm.modules.diffusionmodules.openaimodel.ResBlock],
                         [2, comfy.ldm.modules.diffusionmodules.openaimodel.ResBlock],
                         [3, comfy.ldm.modules.diffusionmodules.openaimodel.Downsample],
@@ -686,7 +702,7 @@ def add_brushnet_patch(model, brushnet, torch_dtype, conditioning_latents,
                          [7, comfy.ldm.modules.diffusionmodules.openaimodel.ResBlock],
                          [8, comfy.ldm.modules.diffusionmodules.openaimodel.ResBlock]]
     else:
-        input_blocks = [[0, comfy.ops.manual_cast.Conv2d],
+        input_blocks = [[0, operations.Conv2d],
                         [1, comfy.ldm.modules.attention.SpatialTransformer],
                         [2, comfy.ldm.modules.attention.SpatialTransformer],
                         [3, comfy.ldm.modules.diffusionmodules.openaimodel.Downsample],

@@ -75,6 +75,35 @@
       }
     }
   },
+  "easy wildcardsMatrix": {
+    "display_name": "通配符提示词矩阵",
+    "inputs": {
+      "Select to add LoRA": {
+        "name": "选择添加Lora"
+      },
+      "Select to add Wildcard": {
+        "name": "选择添加通配符"
+      },
+      "offset": {
+        "name": "偏移量"
+      },
+      "output_limit": {
+        "name": "输出个数限制",
+        "tooltip": "输出n个填充后通配符, -1为输出所有可能性（偏移值失效），默认值为1"
+      }
+    },
+    "outputs": {
+      "0": {
+        "name": "通配填充词"
+      },
+      "1": {
+        "name": "可能性总数"
+      },
+      "2": {
+        "name": "可能性总数（每通配符）"
+      }
+    }
+  },
   "easy prompt": {
     "display_name": "提示词",
     "inputs": {
@@ -5691,6 +5720,9 @@
       },
       "pixels": {
         "name": "限制像素"
+      },
+      "method": {
+        "name": "限制方式"
       }
     },
     "outputs": {
