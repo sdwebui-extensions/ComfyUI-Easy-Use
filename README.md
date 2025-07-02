@@ -47,6 +47,12 @@ Double-click install.bat to install the required dependencies
 
 ## 📜 Changelog
 
+**v1.3.1**
+
+- Rewrite drawNodeWidget and fix the GroupNode preview issue.
+- Updated some features of XYPlot  by [mekinney](https://github.com/mekinney)
+- Add `easy seedList` node (It's useful for in loops)
+
 **v1.3.0**
 
 - Set loop nodes maximum number of inputs and outputs to 20
@@ -499,7 +505,6 @@ If my custom nodes has added value to your day, consider indulging in a coffee t
 💖You can support me in any of the following ways:
 
 - [BiliBili](https://space.bilibili.com/1840885116)
-- [Afdian](https://afdian.com/a/yolain)
 - [Wechat / Alipay](https://github.com/user-attachments/assets/803469bd-ed6a-4fab-932d-50e5088a2d03)
 
 ##  🌟Stargazers
