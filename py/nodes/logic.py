@@ -1369,10 +1369,12 @@ class showAnything:
         if "anything" in kwargs:
             for val in kwargs['anything']:
                 try:
-                    if type(val) is str:
+                    if isinstance(val, str):
                         values.append(val)
-                    elif type(val) is list:
+                    elif isinstance(val, list):
                         values = val
+                    elif isinstance(val, (int, float, bool)):
+                        values.append(str(val))
                     else:
                         val = json.dumps(val)
                         values.append(str(val))
@@ -1381,9 +1383,9 @@ class showAnything:
                     pass
 
         if not extra_pnginfo:
-            print("Error: extra_pnginfo is empty")
+            pass
         elif (not isinstance(extra_pnginfo[0], dict) or "workflow" not in extra_pnginfo[0]):
-            print("Error: extra_pnginfo[0] is not a dict or missing 'workflow' key")
+            pass
         else:
             workflow = extra_pnginfo[0]["workflow"]
             node = next((x for x in workflow["nodes"] if str(x["id"]) == unique_id[0]), None)

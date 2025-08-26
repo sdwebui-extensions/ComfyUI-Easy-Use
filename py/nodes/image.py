@@ -4,19 +4,19 @@ import torch
 import numpy as np
 import comfy.utils
 import comfy.model_management
+import shutil
 from comfy_extras.nodes_compositing import JoinImageWithAlpha
 from server import PromptServer
 from nodes import MAX_RESOLUTION, NODE_CLASS_MAPPINGS as ALL_NODE_CLASS_MAPPINGS
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 import torch.nn.functional as F
-from torchvision.transforms import Resize, CenterCrop, GaussianBlur
+from torchvision.transforms import Resize, CenterCrop, GaussianBlur, ToPILImage
 from torchvision.transforms.functional import to_pil_image
 from ..libs.log import log_node_info
 from ..libs.utils import AlwaysEqualProxy, ByPassTypeTuple
 from ..libs.cache import cache, update_cache, remove_cache
 from ..libs.image import pil2tensor, tensor2pil, ResizeMode, get_new_bounds, RGB2RGBA, image2mask, empty_image, fit_resize_image
 from ..libs.colorfix import adain_color_fix, wavelet_color_fix
-from ..libs.chooser import ChooserMessage, ChooserCancelled
 from ..config import REMBG_DIR, REMBG_MODELS, HUMANPARSING_MODELS, MEDIAPIPE_MODELS, MEDIAPIPE_DIR
 
 any_type = AlwaysEqualProxy("*")
@@ -1011,91 +1011,67 @@ class imageRemBg:
             "result": (new_images, masks)}
 
 # 图像选择器
-# class imageChooser(PreviewImage):
-#   @classmethod
-#   def INPUT_TYPES(self):
-#     return {
-#       "required":{
-#         "mode": (['Always Pause', 'Keep Last Selection'], {"default": "Always Pause"}),
-#       },
-#       "optional": {
-#         "images": ("IMAGE",),
-#       },
-#       "hidden": {"prompt": "PROMPT", "my_unique_id": "UNIQUE_ID", "extra_pnginfo": "EXTRA_PNGINFO"},
-#     }
+from ..libs.chooser import wait_for_chooser
+class imageChooser(PreviewImage):
+  @classmethod
+  def INPUT_TYPES(self):
+    return {
+      "required":{
+        "mode": (['Always Pause', 'Keep Last Selection'], {"default": "Always Pause"}),
+      },
+      "optional": {
+        "images": ("IMAGE",),
+      },
+      "hidden": {"prompt": "PROMPT", "my_unique_id": "UNIQUE_ID", "extra_pnginfo": "EXTRA_PNGINFO"},
+    }
 
-#   RETURN_TYPES = ("IMAGE",)
-#   RETURN_NAMES = ("image",)
-#   FUNCTION = "chooser"
-#   OUTPUT_NODE = True
-#   INPUT_IS_LIST = True
-#   CATEGORY = "EasyUse/Image"
+  RETURN_TYPES = ("IMAGE",)
+  RETURN_NAMES = ("image",)
+  FUNCTION = "chooser"
+  OUTPUT_NODE = True
+  INPUT_IS_LIST = True
+  CATEGORY = "EasyUse/Image"
 
-#   last_ic = {}
-#   @classmethod
-#   def IS_CHANGED(cls, my_unique_id, **kwargs):
-#     return cls.last_ic[my_unique_id[0]]
+  last_ic = {}
+  @classmethod
+  def IS_CHANGED(cls, my_unique_id, **kwargs):
+    return cls.last_ic[my_unique_id[0]]
 
-#   def tensor_bundle(self, tensor_in: torch.Tensor, picks):
-#     if tensor_in is not None and len(picks):
-#       batch = tensor_in.shape[0]
-#       return torch.cat(tuple([tensor_in[(x) % batch].unsqueeze_(0) for x in picks])).reshape(
-#         [-1] + list(tensor_in.shape[1:]))
-#     else:
-#       return None
+  def tensor_bundle(self, tensor_in: torch.Tensor, picks):
+    if tensor_in is not None and len(picks):
+      batch = tensor_in.shape[0]
+      return torch.cat(tuple([tensor_in[(x) % batch].unsqueeze_(0) for x in picks])).reshape(
+        [-1] + list(tensor_in.shape[1:]))
+    else:
+      return None
 
-#   def chooser(self, prompt=None, my_unique_id=None, extra_pnginfo=None, **kwargs):
-#     id = my_unique_id[0]
-#     id = id.split('.')[len(id.split('.')) - 1] if "." in id else id
-#     if id not in ChooserMessage.stash:
-#       ChooserMessage.stash[id] = {}
-#     my_stash = ChooserMessage.stash[id]
+  def chooser(self, prompt=None, my_unique_id=None, extra_pnginfo=None, **kwargs):
+    id = my_unique_id[0]
+    id = id.split('.')[len(id.split('.')) - 1] if "." in id else id
 
-#     # enable stashing. If images is None, we are operating in read-from-stash mode
-#     if 'images' in kwargs:
-#       my_stash['images'] = kwargs['images']
-#     else:
-#       kwargs['images'] = my_stash.get('images', None)
+    if (kwargs['images'] is None):
+      return (None,)
 
-#     if (kwargs['images'] is None):
-#       return (None, None, None, "")
+    images_in = torch.cat(kwargs.pop('images'))
+    for x in kwargs: kwargs[x] = kwargs[x][0]
 
-    # images_in = torch.cat(kwargs.pop('images'))
-    # self.batch = images_in.shape[0]
-    # for x in kwargs: kwargs[x] = kwargs[x][0]
+    try:
+      pnginfo = extra_pnginfo[0]
+    except:
+      pnginfo = None
+    result = self.save_images(images=images_in, prompt=prompt, extra_pnginfo=pnginfo)
+    if "ui" in result and "images" in result['ui']:
+      images = result["ui"]["images"]
+    else:
+      images = []
+    try:
+      PromptServer.instance.send_sync("easyuse-image-choose", {"id": id, "urls": images})
+    except Exception as e:
+      pass
 
-    # try:
-    #   pnginfo = extra_pnginfo[0]
-    # except:
-    #   pnginfo = None
-    # result = self.save_images(images=images_in, prompt=prompt, extra_pnginfo=pnginfo)
-
-#     images = result['ui']['images']
-#     PromptServer.instance.send_sync("easyuse-image-choose", {"id": id, "urls": images})
-
-#     # 获取上次选择
-#     mode = kwargs.pop('mode', 'Always Pause')
-#     last_choosen = None
-#     if mode == 'Keep Last Selection':
-#       if not extra_pnginfo:
-#         print("Error: extra_pnginfo is empty")
-#       elif (not isinstance(extra_pnginfo[0], dict) or "workflow" not in extra_pnginfo[0]):
-#         print("Error: extra_pnginfo[0] is not a dict or missing 'workflow' key")
-#       else:
-#         workflow = extra_pnginfo[0]["workflow"]
-#         node = next((x for x in workflow["nodes"] if str(x["id"]) == id), None)
-#         if node:
-#           last_choosen = node['properties']['values']
-
-#     # wait for selection
-#     try:
-#       selections = ChooserMessage.waitForMessage(id, asList=True) if last_choosen is None or len(last_choosen)<1 else last_choosen
-#       choosen = [x for x in selections if x >= 0] if len(selections)>1 else [0]
-#     except ChooserCancelled:
-#       raise comfy.model_management.InterruptProcessingException()
-
-#     return {"ui": {"images": images},
-#               "result": (self.tensor_bundle(images_in, choosen),)}
+    # 获取上次选择
+    mode = kwargs.pop('mode', 'Always Pause')
+    return wait_for_chooser(id, images_in, mode)
 
 class imageColorMatch(PreviewImage):
   @classmethod
@@ -1283,13 +1259,22 @@ class humanSegmentation:
 
     @classmethod
     def INPUT_TYPES(cls):
-
         return {
           "required":{
             "image": ("IMAGE",),
-            "method": (["selfie_multiclass_256x256", "human_parsing_lip", "human_parts (deeplabv3p)"],),
+            "method": (["selfie_multiclass_256x256", "human_parsing_lip", "human_parts (deeplabv3p)", "segformer_b3_clothes", "segformer_b3_fashion", "face_parsing"],),
             "confidence": ("FLOAT", {"default": 0.4, "min": 0.05, "max": 0.95, "step": 0.01},),
             "crop_multi": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 10.0, "step": 0.001},),
+            "mask_components":(
+               "EASY_COMBO",{
+                 "options": [{'label':'Background','value':0}],
+                 "multi_select": {
+                   "placeholder": "select mask components",
+                   "chip": True,
+                   "max_selected_labels": 4,
+                 }
+               }
+            )
           },
           "hidden": {
               "prompt": "PROMPT",
@@ -1315,12 +1300,7 @@ class humanSegmentation:
         numpy_image = cv2.cvtColor(numpy_image, cv2.COLOR_BGR2RGB)
       return mp.Image(image_format=image_format, data=numpy_image)
 
-    def parsing(self, image, confidence, method, crop_multi, prompt=None, my_unique_id=None):
-      mask_components = []
-      if my_unique_id in prompt:
-        if prompt[my_unique_id]["inputs"]['mask_components']:
-          mask_components = prompt[my_unique_id]["inputs"]['mask_components'].split(',')
-      mask_components = list(map(int, mask_components))
+    def parsing(self, image, confidence, method, crop_multi, mask_components, prompt=None, my_unique_id=None):
       if method == 'selfie_multiclass_256x256':
         try:
           import mediapipe as mp
@@ -1444,6 +1424,107 @@ class humanSegmentation:
           ret_image = RGB2RGBA(tensor2pil(img).convert('RGB'), _mask.convert('L'))
           ret_images.append(pil2tensor(ret_image))
           ret_masks.append(image2mask(_mask))
+
+        output_image = torch.cat(ret_images, dim=0)
+        mask = torch.cat(ret_masks, dim=0)
+
+      elif method in ["segformer_b3_clothes", "segformer_b3_fashion", "face_parsing"]:
+        from transformers import SegformerImageProcessor, AutoModelForSemanticSegmentation
+
+        # 分割
+        def get_segmentation_from_model(tensor_image, model, processor):
+          cloth = tensor2pil(tensor_image)
+          inputs = processor(images=cloth, return_tensors="pt")
+          outputs = model(**inputs)
+          logits = outputs.logits.cpu()
+          upsampled_logits = F.interpolate(logits, size=cloth.size[::-1], mode="bilinear",
+                                                       align_corners=False)
+          pred_seg = upsampled_logits.argmax(dim=1)[0].numpy()
+          return pred_seg, cloth
+
+
+        if method in cache:
+          _, (processor, model) = cache[method][1]
+        else:
+          model_folder_path = os.path.join(folder_paths.models_dir, method)
+          if os.path.exists(model_folder_path):
+            print(f"Start to load existing model...")
+          else:
+            from huggingface_hub import snapshot_download
+            PromptServer.instance.send_sync("easyuse-toast", {"content": f"Model not found locally. Downloading {method}...", "type": 'loading', "duration": 10000})
+            print(f"Model not found locally. Downloading {method}...")
+            model_path_cache = os.path.join(folder_paths.models_dir, "cache-"+method)
+            snapshot_download(
+              repo_id=HUMANPARSING_MODELS[method]['model_name'],
+              local_dir=model_path_cache,
+              local_dir_use_symlinks=False,
+              resume_download=True
+            )
+            shutil.move(model_path_cache, model_folder_path)
+            print(f"Model downloaded to {model_folder_path}...")
+          try:
+            model_folder_path = os.path.normpath(folder_paths.folder_names_and_paths[method][0][0])
+          except:
+            pass
+
+          processor = SegformerImageProcessor.from_pretrained(model_folder_path)
+          model = AutoModelForSemanticSegmentation.from_pretrained(model_folder_path)
+          update_cache(method, 'human_segmentation', (False, (processor, model)))
+
+        ret_images = []
+        ret_masks = []
+
+        if method == "face_parsing":
+          import matplotlib
+          import torchvision.transforms as T
+          transform = ToPILImage()
+          colormap = matplotlib.colormaps['viridis']
+          device = model.device
+          results = []
+          images = []
+          for img in image:
+            size = img.shape[:2]
+            inputs = processor(images=transform(img.permute(2, 0, 1)), return_tensors="pt")
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            outputs = model(**inputs)
+            logits = outputs.logits
+            upsampled_logits = F.interpolate(
+              logits,
+              size=size,
+              mode="bilinear",
+              align_corners=False)
+
+            pred_seg = upsampled_logits.argmax(dim=1)[0]
+            pred_seg_np = pred_seg.cpu().detach().numpy().astype(np.uint8)
+            results.append(torch.tensor(pred_seg_np))
+
+          results_out = torch.stack(results, dim=0)
+          for img, result_item in zip(image, results_out):
+              mask = torch.zeros(result_item.shape, dtype=torch.uint8)
+              for i in mask_components:
+                  mask = mask | torch.where(result_item == i, 1, 0)
+
+              # 将mask转换为numpy数组，并确保数据类型正确
+              mask_np = (mask * 255).numpy().astype(np.uint8)
+              _mask = Image.fromarray(mask_np)
+
+              # 处理图像输出
+              ret_image = RGB2RGBA(tensor2pil(img).convert('RGB'), _mask.convert('L'))
+              ret_images.append(pil2tensor(ret_image))
+              ret_masks.append(image2mask(_mask))
+
+        else:
+          for img in image:
+              pred_seg, cloth = get_segmentation_from_model(img, model, processor)
+              i = torch.unsqueeze(img, 0)
+              i = pil2tensor(tensor2pil(i).convert('RGB'))
+
+              mask = np.isin(pred_seg, mask_components).astype(np.uint8)
+              _mask = Image.fromarray(mask * 255)
+
+              ret_image = RGB2RGBA(tensor2pil(img).convert('RGB'), _mask.convert('L'))
+              ret_images.append(pil2tensor(ret_image))
+              ret_masks.append(image2mask(_mask))
 
         output_image = torch.cat(ret_images, dim=0)
         mask = torch.cat(ret_masks, dim=0)
@@ -1898,47 +1979,6 @@ class loadImagesForLoop:
       "result": tuple(["stub", index, image, mask, name] + outputs),
       "expand": graph.finalize(),
     }
-# 姿势编辑器
-# class poseEditor:
-#   @classmethod
-#   def INPUT_TYPES(self):
-#     temp_dir = folder_paths.get_temp_directory()
-#
-#     if not os.path.isdir(temp_dir):
-#       os.makedirs(temp_dir)
-#
-#     temp_dir = folder_paths.get_temp_directory()
-#
-#     return {"required":
-#               {"image": (sorted(os.listdir(temp_dir)),)},
-#             }
-#
-#   RETURN_TYPES = ("IMAGE",)
-#   FUNCTION = "output_pose"
-#
-#   CATEGORY = "EasyUse/🚫 Deprecated"
-#
-#   def output_pose(self, image):
-#     image_path = os.path.join(folder_paths.get_temp_directory(), image)
-#     # print(f"Create: {image_path}")
-#
-#     i = Image.open(image_path)
-#     image = i.convert("RGB")
-#     image = np.array(image).astype(np.float32) / 255.0
-#     image = torch.from_numpy(image)[None,]
-#
-#     return (image,)
-#
-#   @classmethod
-#   def IS_CHANGED(self, image):
-#     image_path = os.path.join(
-#       folder_paths.get_temp_directory(), image)
-#     # print(f'Change: {image_path}')
-#
-#     m = hashlib.sha256()
-#     with open(image_path, 'rb') as f:
-#       m.update(f.read())
-#     return m.digest().hex()
 
 class makeImageForICRepaint:
   @classmethod

@@ -78,13 +78,14 @@ async def parse_csv(request):
 @PromptServer.instance.routes.get("/easyuse/prompt/styles")
 async def getStylesList(request):
     if "name" in request.rel_url.query:
-        name = request.rel_url.query["name"]
-        if name == 'fooocus_styles':
-            file = os.path.join(RESOURCES_DIR, name+'.json')
-            cn_file = os.path.join(RESOURCES_DIR, name + '_cn.json')
+        style_name = request.rel_url.query["name"]
+        fooocus_custom_dir = os.path.join(FOOOCUS_STYLES_DIR, 'fooocus_styles.json')
+        if style_name == 'fooocus_styles' and not os.path.exists(fooocus_custom_dir):
+            file = os.path.join(RESOURCES_DIR, style_name+'.json')
+            cn_file = os.path.join(RESOURCES_DIR, style_name + '_cn.json')
         else:
-            file = os.path.join(FOOOCUS_STYLES_DIR, name+'.json')
-            cn_file = os.path.join(FOOOCUS_STYLES_DIR, name + '_cn.json')
+            file = os.path.join(FOOOCUS_STYLES_DIR, style_name+'.json')
+            cn_file = os.path.join(FOOOCUS_STYLES_DIR, style_name + '_cn.json')
         cn_data = None
         if os.path.isfile(cn_file):
             f = open(cn_file, 'r', encoding='utf-8')
@@ -103,13 +104,25 @@ async def getStylesList(request):
                     key = ' '.join(
                         word.upper() if word.lower() in ['mre', 'sai', '3d'] else word.capitalize() for word in
                         words)
-                    img_name = '_'.join(words).lower()
                     if "name_cn" in d:
                         nd['name_cn'] = d['name_cn']
                     elif cn_data:
                         nd['name_cn'] = cn_data[key] if key in cn_data else key
                     nd["name"] = d['name']
-                    nd['imgName'] = img_name
+                    if "thumbnail" in d:
+                        thumbnail = d['thumbnail']
+                        if isinstance(d['thumbnail'], str):
+                            nd['thumbnail'] = thumbnail if "http" in thumbnail else f'/easyuse/prompt/styles/image?path={thumbnail}'
+                        elif isinstance(d['thumbnail'], list):
+                            nd['thumbnail'] = [thumb if "http" in thumb else f'/easyuse/prompt/styles/image?path={thumb}' for thumb in thumbnail]
+                    else:
+                        nd['thumbnail'] = f'/easyuse/prompt/styles/image?name={name}&styles_name={style_name}'
+                    if "thumbnail_variant" in d:
+                        nd['thumbnailVariant'] = d['thumbnail_variant']
+                    if "media_type" in d:
+                        nd['mediaType'] = d['media_type']
+                    if "media_subtype" in d:
+                        nd['mediaSubtype'] = d['media_subtype']
                     if "prompt" in d:
                         nd['prompt'] = d['prompt']
                     if "negative_prompt" in d:
@@ -122,7 +135,15 @@ async def getStylesList(request):
 @PromptServer.instance.routes.get("/easyuse/prompt/styles/image")
 async def getStylesImage(request):
     styles_name = request.rel_url.query["styles_name"] if "styles_name" in request.rel_url.query else None
-    if "name" in request.rel_url.query:
+    if "path" in request.rel_url.query:
+        path = request.rel_url.query["path"]
+        file = os.path.join(FOOOCUS_STYLES_DIR, 'samples', path)
+        parent_file = os.path.join(FOOOCUS_STYLES_DIR, path)
+        if os.path.isfile(file):
+            return web.FileResponse(file)
+        elif os.path.isfile(parent_file):
+            return web.FileResponse(parent_file)
+    elif "name" in request.rel_url.query:
         name = request.rel_url.query["name"]
         if os.path.exists(os.path.join(FOOOCUS_STYLES_DIR, 'samples')):
             file = os.path.join(FOOOCUS_STYLES_DIR, 'samples', name + '.jpg')
