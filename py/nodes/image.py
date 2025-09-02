@@ -865,8 +865,8 @@ class imageRemBg:
         repo_id = REMBG_MODELS[rem_mode]['model_url']
         model_path = os.path.join(REMBG_DIR, 'RMBG-2.0')
         if not os.path.exists(model_path):
-          if os.path.exists("/stable-diffusion-cache/models/BiRefNet/RMBG-2.0"):
-            model_path = "/stable-diffusion-cache/models/BiRefNet/RMBG-2.0"
+          if os.path.exists(os.path.join(folder_paths.cache_dir, "models/BiRefNet/RMBG-2.0")):
+            model_path = os.path.join(folder_paths.cache_dir, "models/BiRefNet/RMBG-2.0")
           else:
             from huggingface_hub import snapshot_download
             snapshot_download(repo_id=repo_id, local_dir=model_path, ignore_patterns=["*.md", "*.txt"])
@@ -914,8 +914,8 @@ class imageRemBg:
       else:
         model_url = REMBG_MODELS[rem_mode]['model_url']
         suffix = model_url.split(".")[-1]
-        if os.path.exists('/stable-diffusion-cache/models/RMBG-1.4'):
-          model_path = '/stable-diffusion-cache/models/RMBG-1.4/model.pth'
+        if os.path.exists(os.path.join(folder_paths.cache_dir, "models/RMBG-1.4")):
+          model_path = os.path.join(folder_paths.cache_dir, "models/RMBG-1.4/model.pth")
         else:
           model_path = get_local_filepath(model_url, REMBG_DIR, rem_mode+'.'+suffix)
         net = BriaRMBG()
@@ -948,7 +948,7 @@ class imageRemBg:
       else:
         from ..modules.ben.model import BEN_Base
         model_url = REMBG_MODELS[rem_mode]['model_url']
-        model_path = get_local_filepath(model_url, REMBG_DIR, cache_dir="/stable-diffusion-cache/models/BEN")
+        model_path = get_local_filepath(model_url, REMBG_DIR, cache_dir=os.path.join(folder_paths.cache_dir, "models/BEN"))
 
         model = BEN_Base().to(device).eval()
         model.loadcheckpoints(model_path)
@@ -982,7 +982,7 @@ class imageRemBg:
       if rem_mode in cache:
         _, remover = cache[rem_mode][1]
       else:
-        remover = Remover(jit=torchscript_jit)
+        remover = Remover(jit=torchscript_jit, ckpt=os.path.join(folder_paths.cache_dir, "models/transparent-background/ckpt_base.pth"))
         update_cache(rem_mode, 'remove_background', (False, remover))
 
       for img in tqdm(images, "Inspyrenet Rembg"):
@@ -1313,7 +1313,7 @@ class humanSegmentation:
         if method in cache:
           _, model_asset_buffer = cache["selfie_multiclass_256x256"][1]
         else:
-          model_path = get_local_filepath(MEDIAPIPE_MODELS['selfie_multiclass_256x256']['model_url'], MEDIAPIPE_DIR, cache_dir='/stable-diffusion-cache/models/mediapipe')
+          model_path = get_local_filepath(MEDIAPIPE_MODELS['selfie_multiclass_256x256']['model_url'], MEDIAPIPE_DIR, cache_dir=os.path.join(folder_paths.cache_dir, "models/mediapipe"))
           model_asset_buffer = None
           with open(model_path, "rb") as f:
               model_asset_buffer = f.read()
@@ -1388,7 +1388,7 @@ class humanSegmentation:
         else:
           from ..modules.human_parsing.run_parsing import HumanParsing
           onnx_path = os.path.join(folder_paths.models_dir, 'onnx')
-          model_path = get_local_filepath(HUMANPARSING_MODELS['parsing_lip']['model_url'], onnx_path, cache_dir='/stable-diffusion-cache/models/onnx')
+          model_path = get_local_filepath(HUMANPARSING_MODELS['parsing_lip']['model_url'], onnx_path, cache_dir=os.path.join(folder_paths.cache_dir, "models/onnx"))
           parsing = HumanParsing(model_path=model_path)
           update_cache(method, 'human_segmentation', (False, parsing))
 
@@ -1411,7 +1411,7 @@ class humanSegmentation:
           from ..modules.human_parsing.run_parsing import HumanParts
           onnx_path = os.path.join(folder_paths.models_dir, 'onnx')
           human_parts_path = os.path.join(onnx_path, 'human-parts')
-          model_path = get_local_filepath(HUMANPARSING_MODELS['human-parts']['model_url'], human_parts_path, cache_dir='/stable-diffusion-cache/models/onnx')
+          model_path = get_local_filepath(HUMANPARSING_MODELS['human-parts']['model_url'], human_parts_path, cache_dir=os.path.join(folder_paths.cache_dir, "models/onnx"))
           parsing = HumanParts(model_path=model_path)
           update_cache(method, 'human_segmentation', (False, parsing))
 

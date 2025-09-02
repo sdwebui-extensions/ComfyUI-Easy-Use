@@ -93,8 +93,8 @@ def translate(text):
     global zh_en_model_path, zh_en_model, zh_en_tokenizer
 
     if not os.path.exists(zh_en_model_path):
-        if os.path.exists('/stable-diffusion-cache/models/opus-mt-zh-en'):
-            zh_en_model_path = '/stable-diffusion-cache/models/opus-mt-zh-en'
+        if os.path.exists(os.path.join(folder_paths.cache_dir, "models/opus-mt-zh-en")):
+            zh_en_model_path = os.path.join(folder_paths.cache_dir, "models/opus-mt-zh-en")
         else:
             zh_en_model_path = 'Helsinki-NLP/opus-mt-zh-en'
 
@@ -212,8 +212,8 @@ def zh_to_en(text):
     install_package('sentencepiece', '0.2.0')
 
     if not os.path.exists(zh_en_model_path):
-        if os.path.exists('/stable-diffusion-cache/models/opus-mt-zh-en'):
-            zh_en_model_path = '/stable-diffusion-cache/models/opus-mt-zh-en'
+        if os.path.exists(os.path.join(folder_paths.cache_dir, "models/opus-mt-zh-en")):
+            zh_en_model_path = os.path.join(folder_paths.cache_dir, "models/opus-mt-zh-en")
         else:
             zh_en_model_path = 'Helsinki-NLP/opus-mt-zh-en'
 
