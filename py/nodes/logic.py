@@ -1209,7 +1209,7 @@ class indexAnything:
         return {
             "required": {
                 "any": (any_type, {}),
-                "index": ("INT", {"default": 0, "min": 0, "max": 1000000, "step": 1}),
+                "index": ("INT", {"default": 0, "min": -1000000, "max": 1000000, "step": 1}),
             },
             "hidden":{
                 "prompt": "PROMPT",
@@ -1235,14 +1235,26 @@ class indexAnything:
         node_class = ALL_NODE_CLASS_MAPPINGS[class_type]
         output_is_list = node_class.OUTPUT_IS_LIST[slot] if hasattr(node_class, 'OUTPUT_IS_LIST') else False
 
+        def normalize_index(index, length):
+            """标准化索引，处理负索引并确保在有效范围内"""
+            if index < 0:
+                index = length + index
+                if index < 0:
+                    index = 0
+            return min(max(0, index), length - 1)
+
         if output_is_list or len(any) > 1:
+            index = normalize_index(index, len(any))
             return (any[index],)
         elif isinstance(any[0], torch.Tensor):
-            batch_index = min(any[0].shape[0] - 1, index)
+            index = normalize_index(index, any[0].shape[0])
             s = any[0][index:index + 1].clone()
             return (s,)
         else:
-            return (any[0][index],)
+            if hasattr(any[0], '__len__') and len(any[0]) > 0:
+                index = normalize_index(index, len(any[0]))
+                return (any[0][index],)
+            return (any[0],)
 
 
 class batchAnything:
@@ -1790,3 +1802,4 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "easy saveText": "Save Text",
     "easy sleep": "Sleep",
 }
+
