@@ -5,6 +5,8 @@ import json
 import os
 import folder_paths
 import importlib
+from dist_utils import args
+import torch
 
 cwd_path = os.path.dirname(os.path.realpath(__file__))
 comfy_path = folder_paths.base_path
@@ -23,30 +25,32 @@ for module_name in nodes_list:
 #Wildcards
 from .py.libs.wildcards import read_wildcard_dict
 wildcards_path = os.path.join(os.path.dirname(__file__), "wildcards")
-if not os.path.exists(wildcards_path):
+if not os.path.exists(wildcards_path) and args.rank==0:
     os.mkdir(wildcards_path)
     
 # Add custom wildcards example
 example_path = os.path.join(wildcards_path, "example.txt")
-if not os.path.exists(example_path):
+if not os.path.exists(example_path) and args.rank==0:
     with open(example_path, 'w') as f:
         text = "blue\nred\nyellow\ngreen\nbrown\npink\npurple\norange\nblack\nwhite"
         f.write(text)
+if args.world_size > 1:
+    torch.distributed.barrier()
 read_wildcard_dict(wildcards_path)
 
 #Styles
 styles_path = os.path.join(os.path.dirname(__file__), "styles")
 samples_path = os.path.join(os.path.dirname(__file__), "styles", "samples")
 if os.path.exists(styles_path):
-    if not os.path.exists(samples_path):
+    if not os.path.exists(samples_path) and args.rank==0:
         os.mkdir(samples_path)
-else:
+elif args.rank==0:
     os.mkdir(styles_path)
     os.mkdir(samples_path)
 
 # Add custom styles example
 example_path = os.path.join(styles_path, "your_styles.json.example")
-if not os.path.exists(example_path):
+if not os.path.exists(example_path) and args.rank==0:
     import json
     data = [
         {
@@ -63,31 +67,31 @@ if not os.path.exists(example_path):
 
 web_default_version = 'v2'
 # web directory
-config_path = os.path.join(cwd_path, "config.yaml")
-if os.path.isfile(config_path):
-    with open(config_path, 'r') as f:
-        data = yaml.load(f, Loader=yaml.FullLoader)
-        if data and "WEB_VERSION" in data:
-            directory = f"web_version/{data['WEB_VERSION']}"
-            with open(config_path, 'w') as f:
-                yaml.dump(data, f)
-        elif web_default_version != 'v1':
-            if not data:
-                data = {'WEB_VERSION': web_default_version}
-            elif 'WEB_VERSION' not in data:
-                data = {**data, 'WEB_VERSION': web_default_version}
-            with open(config_path, 'w') as f:
-                yaml.dump(data, f)
-            directory = f"web_version/{web_default_version}"
-        else:
-            directory = f"web_version/v1"
-    if not os.path.exists(os.path.join(cwd_path, directory)):
-        print(f"web root {data['WEB_VERSION']} not found, using default")
-        directory = f"web_version/{web_default_version}"
-    WEB_DIRECTORY = directory
-else:
-    directory = f"web_version/{web_default_version}"
-    WEB_DIRECTORY =  directory
+# config_path = os.path.join(cwd_path, "config.yaml")
+# if os.path.isfile(config_path) and args.rank==0:
+#     with open(config_path, 'r') as f:
+#         data = yaml.load(f, Loader=yaml.FullLoader)
+#         if data and "WEB_VERSION" in data:
+#             directory = f"web_version/{data['WEB_VERSION']}"
+#             with open(config_path, 'w') as f:
+#                 yaml.dump(data, f)
+#         elif web_default_version != 'v1':
+#             if not data:
+#                 data = {'WEB_VERSION': web_default_version}
+#             elif 'WEB_VERSION' not in data:
+#                 data = {**data, 'WEB_VERSION': web_default_version}
+#             with open(config_path, 'w') as f:
+#                 yaml.dump(data, f)
+#             directory = f"web_version/{web_default_version}"
+#         else:
+#             directory = f"web_version/v1"
+#     if not os.path.exists(os.path.join(cwd_path, directory)):
+#         print(f"web root {data['WEB_VERSION']} not found, using default")
+#         directory = f"web_version/{web_default_version}"
+#     WEB_DIRECTORY = directory
+# else:
+directory = f"web_version/{web_default_version}"
+WEB_DIRECTORY =  directory
 
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', "WEB_DIRECTORY"]
 
